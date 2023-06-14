@@ -8,44 +8,59 @@ import random
 	Converts lua code to an event-driven finite state machine (substitute for coroutines)
 	- Splits functions into multiple functions, seperated by async events
 	- Async events defined by await(foo()) calls
-	- Handles events inside conditional and loop blocks
+	- Handles events inside conditional blocks
 
 	Limitations:
-	- Loops are not supported
 	- Gotos and labels are not supported
+	- Objects/Methods are not supported
 	- Must track global table of async functions
 '''
 
 
-class EventFSMTreeGenerator:
-	def __init__(self, source_tree):
-		self.source_tree = source_tree
-		self.visitor = EventFSMVisitor(self)
+
+class GraphNode:
+	def __init__(self, lua_node):
+		self.lua_node = lua_node
+		self.parent = None
+		self.children = None
+  
+
+class RegularGraphNode(GraphNode):
+	def __init__(self, lua_node):
+		super().__init__(lua_node)
+
+class AsyncGraphNode(GraphNode):
+	def __init__(self, lua_node):
+		super().__init__(lua_node)
+
+class LoopGraphNode(GraphNode):
+	def __init__(self, lua_node):
+		super().__init__(lua_node)
+
+
+
+class FSMGraph:
+	def __init__(self):
+		self.root_node = None
+		self.pointer = None
 		
-		self.top_level_functions = [] 
 
-	def create_on_event_function(event_id):
-		pass
+	def add_node(self, graph_node):
+		# Initialize
+		if self.root_node == None:
+			self.root_node = graph_node
+			self.pointer = self.root_node
 
-	def generate(self):
-		self.visitor.visit()
 
-	def add_node(self):
-		pass
 
-	def construct_function():
-		pass
-
-	def render():
-		pass
 
 class EventFSMVisitor:
-	def __init__(self, tree_generator):
-		self.tree_generator = tree_generator
+	def __init__(self, fsm_graph):
+		self.fsm_graph = fsm_graph 
 
 		# Main function	
-		self.main_function_name: Expression = None
-		self.function_count: Number = 0
+		self.main_function_name = None
+		self.function_count = 0
 		self.inside_main_function = False
 
 		self.node_stacks = []
@@ -57,15 +72,55 @@ class EventFSMVisitor:
 
 
 	'''
-		Local functions should not exist, throw an error
+		---------------------------------------------------------------------------------------------------
+		Regular nodes
+		---------------------------------------------------------------------------------------------------
+ 	'''
+	def visit_Assign(self, node):
+		raise NotImplementedError()
+
+	def visit_LocalAssign(self, node):
+		raise NotImplementedError()
+	
 	'''
-	def visit_LocalFunction(self, node):
-		raise Exception("Error: Function must not be a local function")
+		---------------------------------------------------------------------------------------------------
+		Loop nodes
+		---------------------------------------------------------------------------------------------------
+ 	'''
+	def visit_Do(self, node):
+		raise NotImplementedError()
+ 
+	def visit_While(self, node):
+		raise NotImplementedError()
+
+	def visit_Forin(self, node):
+		raise NotImplementedError()
+
+	def visit_Fornum(self, node):
+		raise NotImplementedError()
+
+	def visit_Repeat(self, node):
+		raise NotImplementedError()
+	
+	def visit_Break(self, node):
+		raise NotImplementedError()
+ 
+	'''
+		---------------------------------------------------------------------------------------------------
+		Conditional nodes
+		---------------------------------------------------------------------------------------------------
+ 	'''
+	def visit_ElseIf(self, node):
+		raise NotImplementedError()
+
+	def visit_If(self, node):
+		raise NotImplementedError()
 
 	'''
-		Find and extract the main function name for the script.
-		Note: There should be only one main function.
-	'''
+		---------------------------------------------------------------------------------------------------
+		Function definition/calling nodes
+		---------------------------------------------------------------------------------------------------
+ 	'''
 	def visit_Function(self, node):
 		if self.function_count > 0:
 			raise Exception("Error: More than one function defined. Scripts should only contain one function definition.")
@@ -78,6 +133,11 @@ class EventFSMVisitor:
 
 		self.visit(node.body)
 
+	def visit_LocalFunction(self, node):
+		# TODO: Just change function to not be local
+		raise Exception("Error: Function must not be a local function")
+
+
 	def visit_Call(self, node):
 		# Find await() calls
 		if node.func.id == 'await':
@@ -85,6 +145,22 @@ class EventFSMVisitor:
 			self.node_stacks.append(self.curr_node_stack)
 			self.curr_node_stack = []
 
+	'''
+		---------------------------------------------------------------------------------------------------
+		Unsupported nodes	
+		---------------------------------------------------------------------------------------------------
+ 	'''
+	def visit_Label(self, node):
+		raise Exception("Error: Labels are not supported.")
+
+	def visit_Goto(self, node):
+		raise Exception("Error: Goto is not supported.")
+
+	'''
+		---------------------------------------------------------------------------------------------------
+		Call sorting
+		---------------------------------------------------------------------------------------------------
+ 	'''
 	def visit(self, node):
 		if self.inside_main_function:
 			self.curr_node_stack.append(node)
@@ -118,11 +194,11 @@ end
 # Convert the source code to an AST
 tree = ast.parse(source_code)
 
-# Construct the new tree generator
-tree_generator = EventFSMTreeGenerator()
+# Create FSM graph
+fsm_graph = FSMGraph()
 
 # Walk the AST
-visitor = EventFSMVisitor(tree_generator)
+visitor = EventFSMVisitor(fsm_graph)
 visitor.visit(tree)
 
 
