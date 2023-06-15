@@ -1,8 +1,13 @@
 import luaparser.ast as ast
 from luaparser.astnodes import *
+from luaparser.astnodes import Node
 from typing import List
 import string
 import random
+import logging
+
+
+logging.basicConfig(level=logging.DEBUG, format='%(funcName)s :: %(levelname)s :: %(message)s')
 
 '''
 	Converts lua code to an event-driven finite state machine (substitute for coroutines)
@@ -17,12 +22,16 @@ import random
 '''
 
 
-
 class GraphNode:
 	def __init__(self, lua_node):
 		self.lua_node = lua_node
 		self.parent = None
-		self.children = None
+		self.children = []
+  
+	def add_children(self, children):
+		self.children.append(children)
+		for child in children:
+			child.parent = self	
   
 
 class RegularGraphNode(GraphNode):
@@ -30,6 +39,10 @@ class RegularGraphNode(GraphNode):
 		super().__init__(lua_node)
 
 class AsyncGraphNode(GraphNode):
+	def __init__(self, lua_node):
+		super().__init__(lua_node)
+
+class ConditionalGraphNode(GraphNode):
 	def __init__(self, lua_node):
 		super().__init__(lua_node)
 
@@ -42,6 +55,7 @@ class LoopGraphNode(GraphNode):
 class FSMGraph:
 	def __init__(self):
 		self.root_node = None
+		self.last_added_node = None
 		self.pointer = None
 		
 
@@ -50,6 +64,22 @@ class FSMGraph:
 		if self.root_node == None:
 			self.root_node = graph_node
 			self.pointer = self.root_node
+
+		if(type(graph_node) is RegularGraphNode):
+			self.pointer.add_children([graph_node])
+		elif(type(graph_node) is AsyncGraphNode):
+			self.pointer.add_children([graph_node])
+
+  
+	def get_next_node(self):
+		if self.pointer and self.pointer.children:
+			return self.pointer.children[0]
+		return None
+
+	def move_pointer_to_next_node(self):
+		# Move the pointer to the next node
+		if self.pointer and self.pointer.children:
+			self.pointer = self.pointer.children[0]
 
 
 
@@ -122,14 +152,18 @@ class EventFSMVisitor:
 		---------------------------------------------------------------------------------------------------
  	'''
 	def visit_Function(self, node):
+		logging.debug(f"Visited {node.name.id} with arguments {node.args}")
 		if self.function_count > 0:
 			raise Exception("Error: More than one function defined. Scripts should only contain one function definition.")
 		
 		self.function_count += 1
-		self.main_function_name = node.name
+		self.main_function_name = node.name.id
+		logging.info(f"Found main function {self.main_function_name}")
 
 		# We are now traversing inside the main function
 		self.inside_main_function = True
+  
+		self.fsm_graph.add_node(RegularGraphNode(node))
 
 		self.visit(node.body)
 
@@ -139,8 +173,10 @@ class EventFSMVisitor:
 
 
 	def visit_Call(self, node):
+		logging.debug(f"Visited {node.func.id} with arguments {node.args}")
 		# Find await() calls
 		if node.func.id == 'await':
+			logging.info(f"Await call found. Function: {node.args[0].func.id}")
 			# Append node stack and reset it
 			self.node_stacks.append(self.curr_node_stack)
 			self.curr_node_stack = []
@@ -173,6 +209,7 @@ class EventFSMVisitor:
 			for item in node:
 				self.visit(item)
 		elif isinstance(node, Node):
+			logging.debug(f"Generic visit {node._name}")
 			# visit all object public attributes:
 			children = [
 				attr for attr in node.__dict__.keys() if not attr.startswith("_")
@@ -186,7 +223,7 @@ class EventFSMVisitor:
 source_code = """
 function doThing()
 		bar()
-		finish(foo())
+		await(foo())
 		bar()
 end
 """
