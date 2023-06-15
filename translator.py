@@ -69,8 +69,13 @@ class FSMGraph:
 			self.pointer.add_children([graph_node])
 		elif(type(graph_node) is AsyncGraphNode):
 			self.pointer.add_children([graph_node])
+		elif(type(graph_node) is ConditionalGraphNode):
+			raise NotImplementedError()
+		elif(type(graph_node) is LoopGraphNode):
+			raise NotImplementedError()
 
-  
+
+ 
 	def get_next_node(self):
 		if self.pointer and self.pointer.children:
 			return self.pointer.children[0]
