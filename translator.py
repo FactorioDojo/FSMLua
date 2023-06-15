@@ -256,6 +256,7 @@ end
 # Convert the source code to an AST
 tree = ast.parse(source_code)
 
+print(ast.to_pretty_str(tree))
 # Create FSM graph
 fsm_graph = FSMGraph()
 
