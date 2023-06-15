@@ -33,11 +33,16 @@ class GraphNode:
 		for child in children:
 			child.parent = self	
   
-
+'''
+	Regular graph nodes are any sort of exeuction that does not introduce differing levels of heirarchy or asynchronous calls
+'''
 class RegularGraphNode(GraphNode):
 	def __init__(self, lua_node):
 		super().__init__(lua_node)
 
+'''
+	Asynchronous function calls. 
+'''
 class AsyncGraphNode(GraphNode):
 	def __init__(self, lua_node):
 		super().__init__(lua_node)
@@ -111,6 +116,12 @@ class EventFSMVisitor:
 
 	def visit_LocalAssign(self, node):
 		raise NotImplementedError()
+
+	def visit_SemiColon(self, node):
+		raise NotImplementedError()
+
+	def visit_Return(self, node):
+		raise NotImplementedError()
 	
 	'''
 		---------------------------------------------------------------------------------------------------
@@ -180,6 +191,9 @@ class EventFSMVisitor:
 			# Append node stack and reset it
 			self.node_stacks.append(self.curr_node_stack)
 			self.curr_node_stack = []
+		else:
+			# Regular function call
+			self.fsm_graph.add_node(RegularGraphNode(node))
 
 	'''
 		---------------------------------------------------------------------------------------------------
@@ -191,6 +205,12 @@ class EventFSMVisitor:
 
 	def visit_Goto(self, node):
 		raise Exception("Error: Goto is not supported.")
+
+	def visit_Invoke(self, node):
+		raise Exception("Error: Invoking object methods is not supported.")
+
+	def visit_Method(self, node):
+		raise Exception("Error: Defining object methods is not supported.")
 
 	'''
 		---------------------------------------------------------------------------------------------------
