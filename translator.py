@@ -226,7 +226,9 @@ class EventFSMVisitor:
 		if self.inside_main_function:
 			self.curr_node_stack.append(node)
 		method = 'visit_' + node.__class__.__name__
+		#get correct visit function
 		visitor = getattr(self, method, self.generic_visit)
+		#call visit function with current node
 		return visitor(node)
 
 	def generic_visit(self, node):
