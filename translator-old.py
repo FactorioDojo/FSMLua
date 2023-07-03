@@ -31,10 +31,6 @@ class GraphNode:
 	def __init__(self, lua_node, id):
 		self.id = id
 		self.lua_node = lua_node
-	
-		self.name = lua_node._name
-		
-  
 		self.parent = None
 		self.children = []
   
@@ -49,6 +45,7 @@ class GraphNode:
 class RegularGraphNode(GraphNode):
 	def __init__(self, lua_node, id):
 		super().__init__(lua_node, id)
+		self.name = lua_node._name
 
 '''
 	Asynchronous function calls. 
@@ -56,6 +53,7 @@ class RegularGraphNode(GraphNode):
 class AsyncGraphNode(GraphNode):
 	def __init__(self, lua_node, id):
 		super().__init__(lua_node, id)
+		self.name = lua_node._name + '(async)'
 
 class ConditionalGraphNode(GraphNode):
 	def __init__(self, lua_node, id):
@@ -100,7 +98,6 @@ class FSMGraph:
 			raise NotImplementedError()
 
 		self.pointer = graph_node
-
 
 
  
@@ -218,6 +215,8 @@ class FSMTranslator:
 		# Find await() calls
 		if node.func.id == 'await':
 			logging.info(f"Await call found. Function: {node.args[0].func.id}")
+			self.fsm_graph.add_node(AsyncGraphNode(node, self.node_count))
+			self.node_count += 1
 			# Append node stack and reset it
 			self.node_stacks.append(self.curr_node_stack)
 			self.curr_node_stack = []

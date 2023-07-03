@@ -1,4 +1,5 @@
 digraph {
 	"Function 0" -> "Call 1"
-	"Call 1" -> "Call 2"
+	"Call 1" -> "Call(async) 2"
+	"Call(async) 2" -> "Call 3"
 }
