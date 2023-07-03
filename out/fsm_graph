@@ -1,0 +1,4 @@
+digraph {
+	"Function 0" -> "Call 1"
+	"Call 1" -> "Call 2"
+}

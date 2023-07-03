@@ -1,6 +1,11 @@
+import os
+
 import luaparser.ast as ast
 from luaparser.astnodes import *
 from luaparser.astnodes import Node
+
+from graphviz import Digraph
+
 from typing import List
 import string
 import random
@@ -23,8 +28,13 @@ logging.basicConfig(level=logging.DEBUG, format='%(funcName)s :: %(levelname)s :
 
 
 class GraphNode:
-	def __init__(self, lua_node):
+	def __init__(self, lua_node, id):
+		self.id = id
 		self.lua_node = lua_node
+	
+		self.name = lua_node._name
+		
+  
 		self.parent = None
 		self.children = []
   
@@ -37,39 +47,49 @@ class GraphNode:
 	Regular graph nodes are any sort of exeuction that does not introduce differing levels of heirarchy or asynchronous calls
 '''
 class RegularGraphNode(GraphNode):
-	def __init__(self, lua_node):
-		super().__init__(lua_node)
+	def __init__(self, lua_node, id):
+		super().__init__(lua_node, id)
 
 '''
 	Asynchronous function calls. 
 '''
 class AsyncGraphNode(GraphNode):
-	def __init__(self, lua_node):
-		super().__init__(lua_node)
+	def __init__(self, lua_node, id):
+		super().__init__(lua_node, id)
 
 class ConditionalGraphNode(GraphNode):
-	def __init__(self, lua_node):
-		super().__init__(lua_node)
+	def __init__(self, lua_node, id):
+		super().__init__(lua_node, id)
 
 class LoopGraphNode(GraphNode):
-	def __init__(self, lua_node):
-		super().__init__(lua_node)
+	def __init__(self, lua_node, id):
+		super().__init__(lua_node, id)
 
 
 
 class FSMGraph:
-	def __init__(self):
+	def __init__(self, fsm_translator):
+		self.fsm_translator = fsm_translator
+		self.visual_graph = Digraph()
+  
 		self.root_node = None
 		self.last_added_node = None
 		self.pointer = None
+  
+  
 		
 
 	def add_node(self, graph_node):
-		# Initialize
-		if self.root_node == None:
+     
+		# Initialize root node to main function definition
+		if self.root_node == None and self.fsm_translator.inside_main_function:
 			self.root_node = graph_node
 			self.pointer = self.root_node
+			return
+   
 
+		self.visual_graph.edge(f"{self.pointer.name} {self.pointer.id}", f"{graph_node.name} {graph_node.id}")
+  
 		if(type(graph_node) is RegularGraphNode):
 			self.pointer.add_children([graph_node])
 		elif(type(graph_node) is AsyncGraphNode):
@@ -78,6 +98,9 @@ class FSMGraph:
 			raise NotImplementedError()
 		elif(type(graph_node) is LoopGraphNode):
 			raise NotImplementedError()
+
+		self.pointer = graph_node
+
 
 
  
@@ -94,9 +117,9 @@ class FSMGraph:
 
 
 
-class EventFSMVisitor:
-	def __init__(self, fsm_graph):
-		self.fsm_graph = fsm_graph 
+class FSMTranslator:
+	def __init__(self):
+		self.fsm_graph = FSMGraph(self) 
 
 		# Main function	
 		self.main_function_name = None
@@ -106,7 +129,8 @@ class EventFSMVisitor:
 		self.node_stacks = []
 		self.curr_node_stack = []
 
-
+		self.node_count = 0
+  
 	def generate_event_name(self):
 		return ''.join(random.choices(string.ascii_uppercase + string.digits, k=5))
 
@@ -179,7 +203,8 @@ class EventFSMVisitor:
 		# We are now traversing inside the main function
 		self.inside_main_function = True
   
-		self.fsm_graph.add_node(RegularGraphNode(node))
+		self.fsm_graph.add_node(RegularGraphNode(node, self.node_count))
+		self.node_count += 1
 
 		self.visit(node.body)
 
@@ -198,7 +223,8 @@ class EventFSMVisitor:
 			self.curr_node_stack = []
 		else:
 			# Regular function call
-			self.fsm_graph.add_node(RegularGraphNode(node))
+			self.fsm_graph.add_node(RegularGraphNode(node, self.node_count))
+			self.node_count += 1
 
 	'''
 		---------------------------------------------------------------------------------------------------
@@ -226,7 +252,6 @@ class EventFSMVisitor:
 		if self.inside_main_function:
 			self.curr_node_stack.append(node)
 		method = 'visit_' + node.__class__.__name__
-		print(method)
 		#get correct visit function
 		visitor = getattr(self, method, self.generic_visit)
 		#call visit function with current node
@@ -261,25 +286,17 @@ tree = ast.parse(source_code)
 
 #print(ast.to_pretty_str(tree))
 # Create FSM graph
-fsm_graph = FSMGraph()
 
 # Walk the AST
-visitor = EventFSMVisitor(fsm_graph)
-visitor.visit(tree)
+translator = FSMTranslator()
+translator.visit(tree)
 
+# Create the "Output" folder if it doesn't exist
+output_folder = "out"
+if not os.path.exists(output_folder):
+    os.makedirs(output_folder)
 
-
-# next_event_name = self.generate_event_name()
-# next_event_func_name = next_event_name + "_event_func"
-
-# # Store the next event in the pointers
-# print(f"global.event_ptrs['{func_name}'] = {next_event_func_name}")
-# print(f"global.event_names['{next_event_func_name}'] = generate_event_name()")
-# print(f"script.on_event(global.events['{next_event_func_name}'], function () {next_event_func_name}() end)")
-
-# # Generate the next event function
-# print(f"function {next_event_func_name}()")
-# for arg in node.args:
-# # if isinstance(arg, FuncCall):
-# print(f"    {arg.func.id}()")
-# print("end")
+# Save the FSM graph as a file
+output_path = os.path.join(output_folder, "fsm_graph")
+translator.fsm_graph.visual_graph.format = "png"
+translator.fsm_graph.visual_graph.render(output_path, view=False)
