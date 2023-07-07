@@ -1,5 +1,18 @@
 digraph {
-	"Function 0" -> "Call 1"
-	"Call 1" -> "Call(async) 2"
-	"Call(async) 2" -> "Call 3"
+	"Function 0" -> "LocalAssign 1" [style=solid]
+	"LocalAssign 1" -> "Branch 6" [style=solid]
+	"Branch 6" -> "If 2" [style=dashed]
+	"If 2" -> "(async) Call 8" [style=dashed]
+	"Branch 6" -> "ElseIf 3" [style=dashed]
+	"ElseIf 3" -> "Call 9" [style=dashed]
+	"Branch 6" -> "ElseIf 4" [style=dashed]
+	"ElseIf 4" -> "Branch 12" [style=dashed]
+	"Branch 12" -> "If 10" [style=dashed]
+	"If 10" -> "Call 15" [style=dashed]
+	"Branch 12" -> "Else 11" [style=dashed]
+	"Else 11" -> "(async) Call 16" [style=dashed]
+	"Branch 12" -> "Call 13" [style=dashed]
+	"Branch 6" -> "Else 5" [style=dashed]
+	"Else 5" -> "Call 14" [style=dashed]
+	"Branch 6" -> "Call 7" [style=dashed]
 }

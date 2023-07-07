@@ -1,5 +1,6 @@
 import os
 
+import luaparser
 import luaparser.ast as ast
 from luaparser.astnodes import *
 from luaparser.astnodes import Node
@@ -10,7 +11,7 @@ from typing import List
 import string
 import random
 import logging
-
+os.environ["PATH"] += os.pathsep + 'C:/Program Files/Graphviz/bin/'
 
 logging.basicConfig(level=logging.DEBUG, format='%(funcName)s :: %(levelname)s :: %(message)s')
 
@@ -31,13 +32,15 @@ class GraphNode:
 	def __init__(self, lua_node, id):
 		self.id = id
 		self.lua_node = lua_node
+		self.name = lua_node._name
 		self.parent = None
 		self.children = []
   
 	def add_children(self, children):
-		self.children.append(children)
+		self.children.extend(children)
 		for child in children:
 			child.parent = self	
+  
   
 '''
 	Regular graph nodes are any sort of exeuction that does not introduce differing levels of heirarchy or asynchronous calls
@@ -45,7 +48,6 @@ class GraphNode:
 class RegularGraphNode(GraphNode):
 	def __init__(self, lua_node, id):
 		super().__init__(lua_node, id)
-		self.name = lua_node._name
 
 '''
 	Asynchronous function calls. 
@@ -53,17 +55,28 @@ class RegularGraphNode(GraphNode):
 class AsyncGraphNode(GraphNode):
 	def __init__(self, lua_node, id):
 		super().__init__(lua_node, id)
-		self.name = lua_node._name + '(async)'
+		self.name = '(async) ' + lua_node._name 
 
+
+'''
+	Intermediate reprsentation for conditionals. This node will contain each elseif/else statement.
+'''
+class BranchGraphNode(GraphNode):
+	def __init__(self, id, branch_nodes):
+		self.id = id
+		self.name = 'Branch'
+		self.children = branch_nodes 
+'''
+	Conditional graph nodes contain all statements related to an if statement.
+'''
 class ConditionalGraphNode(GraphNode):
-	def __init__(self, lua_node, id):
+	def __init__(self, lua_node, id, name=""):
 		super().__init__(lua_node, id)
-
+		if name != "": self.name = name
+	
 class LoopGraphNode(GraphNode):
 	def __init__(self, lua_node, id):
 		super().__init__(lua_node, id)
-
-
 
 class FSMGraph:
 	def __init__(self, fsm_translator):
@@ -71,65 +84,108 @@ class FSMGraph:
 		self.visual_graph = Digraph()
   
 		self.root_node = None
-		self.last_added_node = None
-		self.pointer = None
+		self.main_pointer = None
   
-  
-		
-
 	def add_node(self, graph_node):
-     
+	 
 		# Initialize root node to main function definition
-		if self.root_node == None and self.fsm_translator.inside_main_function:
+		if self.root_node is None and self.fsm_translator.inside_main_function:
 			self.root_node = graph_node
 			self.pointer = self.root_node
 			return
-   
-
-		self.visual_graph.edge(f"{self.pointer.name} {self.pointer.id}", f"{graph_node.name} {graph_node.id}")
   
-		if(type(graph_node) is RegularGraphNode):
-			self.pointer.add_children([graph_node])
-		elif(type(graph_node) is AsyncGraphNode):
-			self.pointer.add_children([graph_node])
-		elif(type(graph_node) is ConditionalGraphNode):
-			raise NotImplementedError()
-		elif(type(graph_node) is LoopGraphNode):
-			raise NotImplementedError()
+		self.pointer.add_children([graph_node])
 
 		self.pointer = graph_node
 
+	def get_descendants(self, node):
+		return self._get_descendants(node, [])
+  
+	def _get_descendants(self, node, children):
+		if not node.children: return []
+  	
+		for child in node.children:
+			children.append(child)
+			children.append(self._get_descendants(child))
+	 
+	def render_visual_graph(self, node=None):
+		if node is None: node = self.root_node
+		self._render_visual_graph(node)
+   
+	def _render_visual_graph(self, node):
+		if node is None: return
+  	
+		for child in node.children:
+			if type(node) is RegularGraphNode:
+				self.visual_graph.edge(f"{node.name} {node.id}", f"{child.name} {child.id}", style="solid")
+			else:
+				self.visual_graph.edge(f"{node.name} {node.id}", f"{child.name} {child.id}", style="dashed")
+			self._render_visual_graph(child)
 
- 
-	def get_next_node(self):
-		if self.pointer and self.pointer.children:
-			return self.pointer.children[0]
-		return None
+	def preorder(self, node, visited=None):
+		if visited is None:
+			visited = []
 
-	def move_pointer_to_next_node(self):
-		# Move the pointer to the next node
-		if self.pointer and self.pointer.children:
-			self.pointer = self.pointer.children[0]
+		if node not in visited:
+			visited.append(node)
+			yield node
+			for child in node.children:
+				yield from self.preorder(child, visited)
 
+	def postorder(self, node, visited=None):
+		if visited is None:
+			visited = []
 
+		if node not in visited:
+			visited.append(node)
+			for child in node.children:
+				yield from self.postorder(child, visited)
+			yield node
 
 
 class FSMTranslator:
-	def __init__(self):
+	def __init__(self, source_lua_root_node):
+		self.source_lua_root_node = source_lua_root_node 
+  
+		# Graph
 		self.fsm_graph = FSMGraph(self) 
+
+		# Unpacking flags
+		self.unpack_conditionals = False
+		self.unpack_loops = False
 
 		# Main function	
 		self.main_function_name = None
 		self.function_count = 0
 		self.inside_main_function = False
 
-		self.node_stacks = []
-		self.curr_node_stack = []
-
 		self.node_count = 0
   
-	def generate_event_name(self):
-		return ''.join(random.choices(string.ascii_uppercase + string.digits, k=5))
+	'''
+		Translating is done as follows:
+		1. Travsering from the root, find all regular, conditional and loop nodes and add them to the graph linearly (without going into the branches or loops)
+		2. For each branch set it as root and goto 2.
+		3. 
+	'''
+	def translate(self):
+		# Collect regular/async statements, conditionals (skipping the innards) and loops
+		self.visit(self.source_lua_root_node)
+  
+		# Visit the bodies of if statements
+		# TODO: Nested if statements
+		for node in self.fsm_graph.preorder(self.fsm_graph.root_node):
+			print(node)
+			if(type(node) is BranchGraphNode):
+				for branch in node.children:
+					# Deal with nested here
+					self.fsm_graph.pointer = branch
+        
+					if(type(branch) is ConditionalGraphNode):
+						self.visit(branch.lua_node.body)
+					elif(type(branch) is BranchGraphNode):
+						print("Nested branches")
+
+
 
 
 	'''
@@ -138,13 +194,19 @@ class FSMTranslator:
 		---------------------------------------------------------------------------------------------------
  	'''
 	def visit_Assign(self, node):
-		raise NotImplementedError()
+		self.fsm_graph.add_node(RegularGraphNode(lua_node=node, id=self.node_count))
+		self.node_count += 1
 
+	'''
+		Because of the execution environment, all local assignements will be converted to global assignments
+		TODO: Use factorio global table?
+	'''
 	def visit_LocalAssign(self, node):
-		raise NotImplementedError()
-
+		self.visit_Assign(node)
+  
 	def visit_SemiColon(self, node):
-		raise NotImplementedError()
+		self.fsm_graph.add_node(RegularGraphNode(lua_node=node, id=self.node_count))
+		self.node_count += 1
 
 	def visit_Return(self, node):
 		raise NotImplementedError()
@@ -177,11 +239,37 @@ class FSMTranslator:
 		Conditional nodes
 		---------------------------------------------------------------------------------------------------
  	'''
-	def visit_ElseIf(self, node):
-		raise NotImplementedError()
+	# def visit_ElseIf(self, node):
+	# 	logging.debug(f"Visited ElseIf")
+	# 	self.fsm_graph.add_node(ConditionalGraphNode(lua_node=node, id=self.node_count))
+	# 	self.node_count += 1
+  
+		# self.visit(node.body)
+		# self.visit(node.orelse)
 
 	def visit_If(self, node):
-		raise NotImplementedError()
+		logging.debug(f"Visited If")
+		logging.debug(f"Begin lookahead")
+		
+		branch_nodes = [ConditionalGraphNode(lua_node=node, id=self.node_count)]
+		self.node_count += 1
+  
+		lookahead_node = node.orelse
+		while(type(lookahead_node) == luaparser.astnodes.ElseIf):
+			branch_nodes.append(ConditionalGraphNode(lua_node=lookahead_node, id=self.node_count))
+			self.node_count += 1
+			lookahead_node = lookahead_node.orelse
+
+		# Is there a closing else statement
+		if(lookahead_node is not None):
+			branch_nodes.append(ConditionalGraphNode(lua_node=lookahead_node, id=self.node_count, name="Else"))
+			self.node_count += 1
+   
+		self.fsm_graph.add_node(BranchGraphNode(id=self.node_count, branch_nodes=branch_nodes))
+		self.node_count += 1
+  
+		# self.visit(node.body)
+		# self.visit(node.orelse)
 
 	'''
 		---------------------------------------------------------------------------------------------------
@@ -200,7 +288,7 @@ class FSMTranslator:
 		# We are now traversing inside the main function
 		self.inside_main_function = True
   
-		self.fsm_graph.add_node(RegularGraphNode(node, self.node_count))
+		self.fsm_graph.add_node(RegularGraphNode(lua_node=node, id=self.node_count))
 		self.node_count += 1
 
 		self.visit(node.body)
@@ -215,14 +303,11 @@ class FSMTranslator:
 		# Find await() calls
 		if node.func.id == 'await':
 			logging.info(f"Await call found. Function: {node.args[0].func.id}")
-			self.fsm_graph.add_node(AsyncGraphNode(node, self.node_count))
+			self.fsm_graph.add_node(AsyncGraphNode(lua_node=node, id=self.node_count))
 			self.node_count += 1
-			# Append node stack and reset it
-			self.node_stacks.append(self.curr_node_stack)
-			self.curr_node_stack = []
 		else:
 			# Regular function call
-			self.fsm_graph.add_node(RegularGraphNode(node, self.node_count))
+			self.fsm_graph.add_node(RegularGraphNode(lua_node=node, id=self.node_count))
 			self.node_count += 1
 
 	'''
@@ -248,12 +333,10 @@ class FSMTranslator:
 		---------------------------------------------------------------------------------------------------
  	'''
 	def visit(self, node):
-		if self.inside_main_function:
-			self.curr_node_stack.append(node)
 		method = 'visit_' + node.__class__.__name__
-		#get correct visit function
+		# get correct visit function
 		visitor = getattr(self, method, self.generic_visit)
-		#call visit function with current node
+		# call visit function with current node
 		return visitor(node)
 
 	def generic_visit(self, node):
@@ -270,9 +353,8 @@ class FSMTranslator:
 				self.visit(node.__dict__[child])
 
 
-
 # Given Lua source code
-source_code = """
+source_code_1 = """
 function doThing()
 		bar()
 		await(foo())
@@ -280,20 +362,55 @@ function doThing()
 end
 """
 
+source_code_2 = """
+function doThing()
+		local value = bar()
+		if value == 1 then
+  			await(foo())
+		else
+			bar()
+		end
+		bar()
+end
+"""
+
+source_code_3 = """
+function doThing()
+	local var = bar()
+	if var == thing1 then
+		await(foo())
+	elseif var == thing2 then
+		bar()
+	elseif var == thing3 then
+		if var == thing4 then
+			car()
+		else
+			await(far())
+		end
+		bar()
+	else
+		car()
+	end
+	bar() 
+end
+"""
+
 # Convert the source code to an AST
-tree = ast.parse(source_code)
+source_lua_root_node = ast.parse(source_code_3)
 
 #print(ast.to_pretty_str(tree))
 # Create FSM graph
 
-# Walk the AST
-translator = FSMTranslator()
-translator.visit(tree)
+# Translate
+translator = FSMTranslator(source_lua_root_node)
+translator.translate()
+
+translator.fsm_graph.render_visual_graph()
 
 # Create the "Output" folder if it doesn't exist
 output_folder = "out"
 if not os.path.exists(output_folder):
-    os.makedirs(output_folder)
+	os.makedirs(output_folder)
 
 # Save the FSM graph as a file
 output_path = os.path.join(output_folder, "fsm_graph")
