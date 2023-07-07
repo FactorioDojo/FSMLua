@@ -96,7 +96,8 @@ class FSMGraph:
   
 		self.pointer.add_children([graph_node])
 
-		self.pointer = graph_node
+		if(type(graph_node) is not BranchGraphNode):
+			self.pointer = graph_node
 
 	def get_descendants(self, node):
 		return self._get_descendants(node, [])

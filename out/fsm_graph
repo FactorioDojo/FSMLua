@@ -11,8 +11,8 @@ digraph {
 	"If 10" -> "Call 15" [style=dashed]
 	"Branch 12" -> "Else 11" [style=dashed]
 	"Else 11" -> "(async) Call 16" [style=dashed]
-	"Branch 12" -> "Call 13" [style=dashed]
+	"ElseIf 4" -> "Call 13" [style=dashed]
 	"Branch 6" -> "Else 5" [style=dashed]
 	"Else 5" -> "Call 14" [style=dashed]
-	"Branch 6" -> "Call 7" [style=dashed]
+	"LocalAssign 1" -> "Call 7" [style=solid]
 }
