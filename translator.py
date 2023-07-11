@@ -10,10 +10,12 @@ from graphviz import Digraph
 from typing import List
 import string
 import random
-import logging
+import coloredlogs, logging
 os.environ["PATH"] += os.pathsep + 'C:/Program Files/Graphviz/bin/'
+os.environ["COLOREDLOGS_LOG_FORMAT"] ='[%(hostname)s] %(funcName)s :: %(levelname)s :: %(message)s'
 
-logging.basicConfig(level=logging.DEBUG, format='%(funcName)s :: %(levelname)s :: %(message)s')
+# logging.basicConfig(level=logging.DEBUG, format='%(funcName)s :: %(levelname)s :: %(message)s')
+coloredlogs.install(level='DEBUG')
 
 '''
 	Converts lua code to an event-driven finite state machine (substitute for coroutines)
@@ -25,6 +27,8 @@ logging.basicConfig(level=logging.DEBUG, format='%(funcName)s :: %(levelname)s :
 	- Gotos and labels are not supported
 	- Objects/Methods are not supported
 	- Must track global table of async functions
+ 
+	TODO: Async assignments
 '''
 
 
@@ -40,14 +44,29 @@ class GraphNode:
 		self.children.extend(children)
 		for child in children:
 			child.parent = self	
-  
-  
+
+
 '''
 	Regular graph nodes are any sort of exeuction that does not introduce differing levels of heirarchy or asynchronous calls
 '''
 class RegularGraphNode(GraphNode):
 	def __init__(self, lua_node, id):
 		super().__init__(lua_node, id)
+
+'''
+
+'''
+class LocalAssignGraphNode(RegularGraphNode):
+	def __init__(self, lua_node, id):
+		super().__init__(lua_node, id)
+
+'''
+	Regular graph nodes are any sort of exeuction that does not introduce differing levels of heirarchy or asynchronous calls
+'''
+class GlobalAssignGraphNode(RegularGraphNode):
+	def __init__(self, lua_node, id):
+		super().__init__(lua_node, id)
+
 
 '''
 	Asynchronous function calls. 
@@ -57,15 +76,6 @@ class AsyncGraphNode(GraphNode):
 		super().__init__(lua_node, id)
 		self.name = '(async) ' + lua_node._name 
 
-
-'''
-	Intermediate reprsentation for conditionals. This node will contain each elseif/else statement.
-'''
-class BranchGraphNode(GraphNode):
-	def __init__(self, id, branch_nodes):
-		self.id = id
-		self.name = 'Branch'
-		self.children = branch_nodes 
 '''
 	Conditional graph nodes contain all statements related to an if statement.
 '''
@@ -78,6 +88,16 @@ class LoopGraphNode(GraphNode):
 	def __init__(self, lua_node, id):
 		super().__init__(lua_node, id)
 
+'''
+	Intermediate reprsentation for conditionals. This node will contain each elseif/else statement.
+'''
+class BranchGraphNode(GraphNode):
+	def __init__(self, id, branch_nodes):
+		self.id = id
+		self.name = 'Branch'
+		self.children = branch_nodes
+  
+   
 class FSMGraph:
 	def __init__(self, fsm_translator):
 		self.fsm_translator = fsm_translator
@@ -164,20 +184,48 @@ class FSMTranslator:
   
 	'''
 		Translating is done as follows:
-		1. Travsering from the root, find all regular, conditional and loop nodes and add them to the graph linearly (without going into the branches or loops)
-		2. For each branch set it as root and goto 2.
-		3. 
+		1. BuildIR:
+			- Build the IR graph tree
+  			- 1a. Travsering from the root, find all regular, conditional and loop nodes and add them to the graph linearly 
+     		(without going into the branches or loops)
+			- 1b. For each branch set it as root and goto 1a.
+		2. Modify: 
+  			- Change local assignments to global assignments
+			- TODO: Unroll loops?
+		3. Extract: 
+  			- Extract each casual thread, appending casual invariant nodes where necessary, and link them
+		4. Construct:
+			- Secrete a new lua AST
 	'''
 	def translate(self):
 		# Stage 1
-		# Collect regular/async statements, conditionals (skipping the innards) and loops
-		self.visit(self.source_lua_root_node)
+		# Build the graph tree 
+  
+		logging.info(f"Building IR graph")
+		self.buildIR(self.source_lua_root_node)
+
+
+		logging.info(f"Modifying IR graph")
+		self.modify()
 	
-		# Stage 2
-		# Visit the bodies of if statements
-		# TODO: Nested if statements
+ 
+		logging.info(f"Extracting and linking causal threads")
+		self.extract()
+  
+  
+		logging.info(f"Constructing new AST")
+		self.construct()
+
+
+	def buildIR(self, node):
+		# First collect regular/async statements, branches and loops (without entering)
+		logging.debug("Collecting nodes")	
+		self.visit(node)
+
+		# Enter the bodies of if statements and loops
+		logging.debug("Expanding nodes")	
 		for node in self.fsm_graph.preorder(self.fsm_graph.root_node):
-			print(node)
+			# print(node)
 			if(type(node) is BranchGraphNode):
 				for branch in node.children:
 					# Deal with nested here
@@ -188,7 +236,17 @@ class FSMTranslator:
 					elif(type(branch) is BranchGraphNode):
 						print("Nested branches")
 
+	def modify(self):
+		pass
 
+	def extract(self):
+		pass
+
+	def link(self):
+		pass
+
+	def construct(self):
+		pass
 
 
 	'''
@@ -252,22 +310,23 @@ class FSMTranslator:
 
 	def visit_If(self, node):
 		logging.debug(f"Visited If")
-		logging.debug(f"Begin lookahead")
 		
 		branch_nodes = [ConditionalGraphNode(lua_node=node, id=self.node_count)]
 		self.node_count += 1
   
 		lookahead_node = node.orelse
 		while(type(lookahead_node) == luaparser.astnodes.ElseIf):
+			logging.debug(f"Found ElseIf")
 			branch_nodes.append(ConditionalGraphNode(lua_node=lookahead_node, id=self.node_count))
 			self.node_count += 1
 			lookahead_node = lookahead_node.orelse
 
 		# Is there a closing else statement
 		if(lookahead_node is not None):
+			logging.debug(f"Found Else")
 			branch_nodes.append(ConditionalGraphNode(lua_node=lookahead_node, id=self.node_count, name="Else"))
 			self.node_count += 1
-   
+		
 		self.fsm_graph.add_node(BranchGraphNode(id=self.node_count, branch_nodes=branch_nodes))
 		self.node_count += 1
   
