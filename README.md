@@ -8,6 +8,13 @@ The provided Factorio modding API and execution environment disables the use of 
 
 In an effort to avoid writing a 3rd party wrapper around the entirety of the Factorio API, as well as providing the simplest possible interface for the LLM to write scripts, we implement a transpiler-like tool to leverage the provided event system from Factorio's modding API to generate functionally asynchronous code.
 
+## Features
+
+We aim to implement as many features in the Lua language as possible. Currently unsupported features are:
+- Do/While/Forin/Fornum/Repeat/Break
+- Labels & Gotos
+- Methods & Invoking methods
+
 # Installing
 TODO
 
