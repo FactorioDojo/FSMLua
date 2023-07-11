@@ -16,7 +16,7 @@ if os.name == 'nt':
  
 os.environ["COLOREDLOGS_LOG_FORMAT"] ='[%(hostname)s] %(funcName)s :: %(levelname)s :: %(message)s'
 
-coloredlogs.install(level='DEBUG')
+coloredlogs.install(level='INFO')
 
 '''
 	Converts lua code to an event-driven finite state machine (substitute for coroutines)
@@ -44,7 +44,10 @@ class GraphNode:
 	def add_children(self, children):
 		self.children.extend(children)
 		for child in children:
-			child.parent = self	
+			child.parent = self
+   
+	def remove_children(self, removed_children):
+		self.children = [child for child in self.children if child not in removed_children]
 
 
 '''
@@ -98,19 +101,23 @@ class BranchGraphNode(GraphNode):
 		self.name = 'Branch'
 		self.children = branch_nodes
   
+
+  
    
-class FSMGraph:
-	def __init__(self, fsm_translator):
-		self.fsm_translator = fsm_translator
+class IRGraph:
+	def __init__(self, translator):
+		self.translator = translator
 		self.visual_graph = Digraph()
   
 		self.root_node = None
 		self.main_pointer = None
   
+
+  
 	def add_node(self, graph_node):
 	 
-		# Initialize root node to main function definition
-		if self.root_node is None and self.fsm_translator.inside_main_function:
+		# Initialize root node
+		if self.root_node is None:
 			self.root_node = graph_node
 			self.pointer = self.root_node
 			return
@@ -119,6 +126,17 @@ class FSMGraph:
 
 		if(type(graph_node) is not BranchGraphNode):
 			self.pointer = graph_node
+
+	def replace_node(self, old_node, new_node):
+		# Replace old_node's parent's reference to this old_node with new_node
+		old_node.parent.remove_child(old_node)
+		old_node.parent.add_child(new_node)
+  
+		# Replace old_node's children reference to old_node with new_node
+		for child in old_node.children:
+			child.parent = new_node
+   
+		del old_node
 
 	def get_descendants(self, node):
 		return self._get_descendants(node, [])
@@ -130,9 +148,22 @@ class FSMGraph:
 			children.append(child)
 			children.append(self._get_descendants(child))
 	 
-	def render_visual_graph(self, node=None):
+	def render_visual_graph(self, output_graph_name, node=None):
+  
+		self.visual_graph = Digraph()
+		
 		if node is None: node = self.root_node
 		self._render_visual_graph(node)
+  
+		# Create the "Output" folder if it doesn't exist
+		output_folder = "out"
+		if not os.path.exists(output_folder):
+			os.makedirs(output_folder)
+
+		# Save the FSM graph as a file
+		output_path = os.path.join(output_folder, output_graph_name)
+		self.visual_graph.format = "png"
+		self.visual_graph.render(output_path, view=False)
    
 	def _render_visual_graph(self, node):
 		if node is None: return
@@ -165,12 +196,15 @@ class FSMGraph:
 			yield node
 
 
-class FSMTranslator:
-	def __init__(self, source_lua_root_node):
+
+class Translator:
+	def __init__(self, source_lua_root_node, render_visual_graph):
 		self.source_lua_root_node = source_lua_root_node 
+		self.render_visual_graph = render_visual_graph
   
-		# Graph
-		self.fsm_graph = FSMGraph(self) 
+		# Graphs
+		self.IR_graph = IRGraph(self) 
+		self.execution_graph = IRGraph(self)
 
 		# Unpacking flags
 		self.unpack_conditionals = False
@@ -186,16 +220,18 @@ class FSMTranslator:
 	'''
 		Translating is done as follows:
 		1. BuildIR:
-			- Build the IR graph tree
+			- Build the Intermediate Representation (IR) graph tree
   			- 1a. Travsering from the root, find all regular, conditional and loop nodes and add them to the graph linearly 
-     		(without going into the branches or loops)
+	 		(without going into the branches or loops)
 			- 1b. For each branch set it as root and goto 1a.
-		2. Modify: 
+		2. Modify Assignments: 
   			- Change local assignments to global assignments
 			- TODO: Unroll loops?
-		3. Extract: 
-  			- Extract each casual thread, appending casual invariant nodes where necessary, and link them
-		4. Construct:
+		3. Build Exeuction Graph: 
+  			- Build the exeuction graph, appending casual invariant nodes where necessary
+		4. Extract functions:
+			- Extract and link functions together
+		5. Construct AST:
 			- Secrete a new lua AST
 	'''
 	def translate(self):
@@ -204,18 +240,25 @@ class FSMTranslator:
   
 		logging.info(f"Building IR graph")
 		self.buildIR(self.source_lua_root_node)
+		if self.render_visual_graph: 
+			self.IR_graph.render_visual_graph("IR_graph")
 
 
-		logging.info(f"Modifying IR graph")
-		self.modify()
-	
+		logging.info(f"Modifying assignments for IR graph")
+		self.modify_assignments()
+		if self.render_visual_graph: 
+			self.IR_graph.render_visual_graph("Modified_IR_graph")
  
-		logging.info(f"Extracting and linking causal threads")
-		self.extract()
-  
+		logging.info(f"Building execution graph")
+		self.build_execution_graph()
+		if self.render_visual_graph: 
+			self.execution_graph.render_visual_graph("Exeuction_graph")
+ 
+		logging.info(f"Extracting and linking functions")
+		self.extract_functions()
   
 		logging.info(f"Constructing new AST")
-		self.construct()
+		self.construct_ast()
 
 
 	def buildIR(self, node):
@@ -225,28 +268,42 @@ class FSMTranslator:
 
 		# Enter the bodies of if statements and loops
 		logging.debug("Expanding nodes")	
-		for node in self.fsm_graph.preorder(self.fsm_graph.root_node):
-			# print(node)
-			if(type(node) is BranchGraphNode):
+		for node in self.IR_graph.preorder(self.IR_graph.root_node):
+			if type(node) is BranchGraphNode:
+				for branch in node.children:
+					self.IR_graph.pointer = branch
+					if(type(branch) is ConditionalGraphNode):
+						self.visit(branch.lua_node.body)
+					elif(type(branch) is BranchGraphNode):
+						raise NotImplementedError("Nested branches")
+
+	# TODO
+	def modify_assignments(self):
+		pass
+
+	def build_execution_graph(self):
+  
+		visited = []	
+		causal_threads = []
+  
+		causal_thread = []
+		for node in self.IR_graph.preorder(self.IR_graph.root_node):
+			causal_thread.append(node)
+			if type(node) is BranchGraphNode:
 				for branch in node.children:
 					# Deal with nested here
-					self.fsm_graph.pointer = branch
-        
+					self.IR_graph.pointer = branch
+		
 					if(type(branch) is ConditionalGraphNode):
 						self.visit(branch.lua_node.body)
 					elif(type(branch) is BranchGraphNode):
 						print("Nested branches")
 
-	def modify(self):
+
+	def extract_functions(self):
 		pass
 
-	def extract(self):
-		pass
-
-	def link(self):
-		pass
-
-	def construct(self):
+	def construct_ast(self):
 		pass
 
 
@@ -256,7 +313,7 @@ class FSMTranslator:
 		---------------------------------------------------------------------------------------------------
  	'''
 	def visit_Assign(self, node):
-		self.fsm_graph.add_node(RegularGraphNode(lua_node=node, id=self.node_count))
+		self.IR_graph.add_node(RegularGraphNode(lua_node=node, id=self.node_count))
 		self.node_count += 1
 
 	'''
@@ -267,7 +324,7 @@ class FSMTranslator:
 		self.visit_Assign(node)
   
 	def visit_SemiColon(self, node):
-		self.fsm_graph.add_node(RegularGraphNode(lua_node=node, id=self.node_count))
+		self.IR_graph.add_node(RegularGraphNode(lua_node=node, id=self.node_count))
 		self.node_count += 1
 
 	def visit_Return(self, node):
@@ -303,7 +360,7 @@ class FSMTranslator:
  	'''
 	# def visit_ElseIf(self, node):
 	# 	logging.debug(f"Visited ElseIf")
-	# 	self.fsm_graph.add_node(ConditionalGraphNode(lua_node=node, id=self.node_count))
+	# 	self.IR_graph.add_node(ConditionalGraphNode(lua_node=node, id=self.node_count))
 	# 	self.node_count += 1
   
 		# self.visit(node.body)
@@ -328,7 +385,7 @@ class FSMTranslator:
 			branch_nodes.append(ConditionalGraphNode(lua_node=lookahead_node, id=self.node_count, name="Else"))
 			self.node_count += 1
 		
-		self.fsm_graph.add_node(BranchGraphNode(id=self.node_count, branch_nodes=branch_nodes))
+		self.IR_graph.add_node(BranchGraphNode(id=self.node_count, branch_nodes=branch_nodes))
 		self.node_count += 1
   
 		# self.visit(node.body)
@@ -351,7 +408,7 @@ class FSMTranslator:
 		# We are now traversing inside the main function
 		self.inside_main_function = True
   
-		self.fsm_graph.add_node(RegularGraphNode(lua_node=node, id=self.node_count))
+		self.IR_graph.add_node(RegularGraphNode(lua_node=node, id=self.node_count))
 		self.node_count += 1
 
 		self.visit(node.body)
@@ -366,11 +423,11 @@ class FSMTranslator:
 		# Find await() calls
 		if node.func.id == 'await':
 			logging.info(f"Await call found. Function: {node.args[0].func.id}")
-			self.fsm_graph.add_node(AsyncGraphNode(lua_node=node, id=self.node_count))
+			self.IR_graph.add_node(AsyncGraphNode(lua_node=node, id=self.node_count))
 			self.node_count += 1
 		else:
 			# Regular function call
-			self.fsm_graph.add_node(RegularGraphNode(lua_node=node, id=self.node_count))
+			self.IR_graph.add_node(RegularGraphNode(lua_node=node, id=self.node_count))
 			self.node_count += 1
 
 	'''
@@ -458,6 +515,44 @@ function doThing()
 end
 """
 
+
+source_code_4 = """
+function doThing()
+	local var = bar()
+	if var == thing1 then
+		await(foo())
+	elseif var == thing2 then
+		bar()
+	elseif var == thing3 then
+		if var == thing4 then
+			car()
+		else
+			await(far())
+		end
+		bar()
+	else
+		car()
+	end
+	bar() 
+ 	if var == thing1 then
+		await(foo())
+	elseif var == thing2 then
+		bar()
+	elseif var == thing3 then
+		if var == thing4 then
+			car()
+		else
+			await(far())
+		end
+		bar()
+	else
+		car()
+	end
+	bar()
+ 
+end
+"""
+
 # Convert the source code to an AST
 source_lua_root_node = ast.parse(source_code_3)
 
@@ -465,17 +560,8 @@ source_lua_root_node = ast.parse(source_code_3)
 # Create FSM graph
 
 # Translate
-translator = FSMTranslator(source_lua_root_node)
+translator = Translator(source_lua_root_node, render_visual_graph=True)
 translator.translate()
 
-translator.fsm_graph.render_visual_graph()
 
-# Create the "Output" folder if it doesn't exist
-output_folder = "out"
-if not os.path.exists(output_folder):
-	os.makedirs(output_folder)
 
-# Save the FSM graph as a file
-output_path = os.path.join(output_folder, "fsm_graph")
-translator.fsm_graph.visual_graph.format = "png"
-translator.fsm_graph.visual_graph.render(output_path, view=False)
