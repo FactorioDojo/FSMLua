@@ -8,13 +8,14 @@ from luaparser.astnodes import Node
 from graphviz import Digraph
 
 from typing import List
-import string
-import random
 import coloredlogs, logging
-os.environ["PATH"] += os.pathsep + 'C:/Program Files/Graphviz/bin/'
+
+# windows only
+if os.name == 'nt':
+	os.environ["PATH"] += os.pathsep + 'C:/Program Files/Graphviz/bin/'
+ 
 os.environ["COLOREDLOGS_LOG_FORMAT"] ='[%(hostname)s] %(funcName)s :: %(levelname)s :: %(message)s'
 
-# logging.basicConfig(level=logging.DEBUG, format='%(funcName)s :: %(levelname)s :: %(message)s')
 coloredlogs.install(level='DEBUG')
 
 '''
