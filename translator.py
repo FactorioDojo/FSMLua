@@ -139,14 +139,29 @@ class IRGraph:
 		del old_node
 
 	def get_descendants(self, node):
-		return self._get_descendants(node, [])
+		children = []
+		return self._get_descendants(node, children)
+		return children
   
 	def _get_descendants(self, node, children):
-		if not node.children: return []
+		if not node.children: return
   	
 		for child in node.children:
 			children.append(child)
-			children.append(self._get_descendants(child))
+			self._get_descendants(child)
+   
+	def get_leaf_nodes(self, node):
+		leaves = []
+		self._get_leaf_nodes(node, leaves)
+		return leaves
+
+	def _get_leaf_nodes(self, node, leaves):
+		if not node.children: 
+			leaves.append(node)
+			return
+  	
+		for child in node.children:
+			self._get_leaf_nodes(self, child, leaves)
 	 
 	def render_visual_graph(self, output_graph_name, node=None):
   
@@ -169,7 +184,7 @@ class IRGraph:
 		if node is None: return
   	
 		for child in node.children:
-			if type(node) is RegularGraphNode:
+			if type(node) is RegularGraphNode or type(node) is ConditionalGraphNode:
 				self.visual_graph.edge(f"{node.name} {node.id}", f"{child.name} {child.id}", style="solid")
 			else:
 				self.visual_graph.edge(f"{node.name} {node.id}", f"{child.name} {child.id}", style="dashed")
@@ -227,8 +242,8 @@ class Translator:
 		2. Modify Assignments: 
   			- Change local assignments to global assignments
 			- TODO: Unroll loops?
-		3. Build Exeuction Graph: 
-  			- Build the exeuction graph, appending casual invariant nodes where necessary
+		3. Linearize Execution: 
+			- Find node (x) with a branch child, add other children of (x) to the end of each execution path of the branch child 
 		4. Extract functions:
 			- Extract and link functions together
 		5. Construct AST:
@@ -249,8 +264,8 @@ class Translator:
 		if self.render_visual_graph: 
 			self.IR_graph.render_visual_graph("Modified_IR_graph")
  
-		logging.info(f"Building execution graph")
-		self.build_execution_graph()
+		logging.info(f"Linearizing execution")
+		self.linearize_execution()
 		if self.render_visual_graph: 
 			self.execution_graph.render_visual_graph("Exeuction_graph")
  
@@ -281,23 +296,13 @@ class Translator:
 	def modify_assignments(self):
 		pass
 
-	def build_execution_graph(self):
-  
-		visited = []	
-		causal_threads = []
-  
-		causal_thread = []
+	# Find node (x) with a branch child, add other children of (x) to the end of each execution path of the branch child 
+	def linearize_execution(self):
+	
 		for node in self.IR_graph.preorder(self.IR_graph.root_node):
-			causal_thread.append(node)
-			if type(node) is BranchGraphNode:
-				for branch in node.children:
-					# Deal with nested here
-					self.IR_graph.pointer = branch
-		
-					if(type(branch) is ConditionalGraphNode):
-						self.visit(branch.lua_node.body)
-					elif(type(branch) is BranchGraphNode):
-						print("Nested branches")
+			for child in node.children:	
+				if type(child) is BranchGraphNode:
+					pass
 
 
 	def extract_functions(self):
@@ -511,7 +516,11 @@ function doThing()
 	else
 		car()
 	end
-	bar() 
+	bar()
+ 	if var == thing1 then
+		await(foo()) 
+	end
+	car()
 end
 """
 
