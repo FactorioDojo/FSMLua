@@ -16,7 +16,7 @@ if os.name == 'nt':
  
 os.environ["COLOREDLOGS_LOG_FORMAT"] ='[%(hostname)s] %(funcName)s :: %(levelname)s :: %(message)s'
 
-coloredlogs.install(level='INFO')
+coloredlogs.install(level='DEBUG')
 
 '''
 	Converts lua code to an event-driven finite state machine (substitute for coroutines)
@@ -29,22 +29,31 @@ coloredlogs.install(level='INFO')
 	- Objects/Methods are not supported
 	- Must track global table of async functions
  
-	TODO: Async assignments
+	TODO:
+	- Loops
+ 	- Async assignments
+	
 '''
 
 
 class GraphNode:
-	def __init__(self, lua_node, id):
+	def __init__(self, lua_node):
 		self.id = id
 		self.lua_node = lua_node
-		self.name = lua_node._name
+		if lua_node:
+			self.name = lua_node._name
 		self.parent = None
 		self.children = []
+
+
+	def add_child(self, child):
+		child.parent = self
+		self.children.append(child)
   
 	def add_children(self, children):
-		self.children.extend(children)
 		for child in children:
 			child.parent = self
+		self.children.extend(children)
    
 	def remove_children(self, removed_children):
 		self.children = [child for child in self.children if child not in removed_children]
@@ -54,52 +63,53 @@ class GraphNode:
 	Regular graph nodes are any sort of exeuction that does not introduce differing levels of heirarchy or asynchronous calls
 '''
 class RegularGraphNode(GraphNode):
-	def __init__(self, lua_node, id):
-		super().__init__(lua_node, id)
+	def __init__(self, lua_node):
+		super().__init__(lua_node)
 
 '''
 
 '''
 class LocalAssignGraphNode(RegularGraphNode):
-	def __init__(self, lua_node, id):
-		super().__init__(lua_node, id)
+	def __init__(self, lua_node):
+		super().__init__(lua_node)
 
 '''
 	Regular graph nodes are any sort of exeuction that does not introduce differing levels of heirarchy or asynchronous calls
 '''
 class GlobalAssignGraphNode(RegularGraphNode):
-	def __init__(self, lua_node, id):
-		super().__init__(lua_node, id)
+	def __init__(self, lua_node):
+		super().__init__(lua_node)
 
 
 '''
 	Asynchronous function calls. 
 '''
 class AsyncGraphNode(GraphNode):
-	def __init__(self, lua_node, id):
-		super().__init__(lua_node, id)
+	def __init__(self, lua_node):
+		super().__init__(lua_node)
 		self.name = '(async) ' + lua_node._name 
 
 '''
 	Conditional graph nodes contain all statements related to an if statement.
 '''
 class ConditionalGraphNode(GraphNode):
-	def __init__(self, lua_node, id, name=""):
-		super().__init__(lua_node, id)
+	def __init__(self, lua_node, name=""):
+		super().__init__(lua_node)
 		if name != "": self.name = name
 	
 class LoopGraphNode(GraphNode):
-	def __init__(self, lua_node, id):
-		super().__init__(lua_node, id)
+	def __init__(self, lua_node):
+		super().__init__(lua_node)
 
 '''
 	Intermediate reprsentation for conditionals. This node will contain each elseif/else statement.
 '''
 class BranchGraphNode(GraphNode):
-	def __init__(self, id, branch_nodes):
+	def __init__(self, else_statement_present):
+		super().__init__(lua_node=None)
 		self.id = id
 		self.name = 'Branch'
-		self.children = branch_nodes
+		self.else_statement_present = else_statement_present
   
 
   
@@ -110,7 +120,9 @@ class IRGraph:
 		self.visual_graph = Digraph()
   
 		self.root_node = None
-		self.main_pointer = None
+		self.pointer = None
+  
+		self.node_count = 0
   
 
   
@@ -118,14 +130,21 @@ class IRGraph:
 	 
 		# Initialize root node
 		if self.root_node is None:
+			logging.debug(f"Initializing root node of graph with node {graph_node.name}")
+			graph_node.id = self.node_count
+			self.node_count += 1
 			self.root_node = graph_node
 			self.pointer = self.root_node
 			return
-  
-		self.pointer.add_children([graph_node])
 
-		if(type(graph_node) is not BranchGraphNode):
-			self.pointer = graph_node
+		graph_node.id = self.node_count
+		self.node_count += 1
+  
+		logging.debug(f"Adding node {graph_node.name} to parent node {self.pointer.name}")
+		self.pointer.add_child(graph_node)
+
+		self.pointer = graph_node
+
 
 	def replace_node(self, old_node, new_node):
 		# Replace old_node's parent's reference to this old_node with new_node
@@ -285,6 +304,7 @@ class Translator:
 		logging.debug("Expanding nodes")	
 		for node in self.IR_graph.preorder(self.IR_graph.root_node):
 			if type(node) is BranchGraphNode:
+				print(node.children)
 				for branch in node.children:
 					self.IR_graph.pointer = branch
 					if(type(branch) is ConditionalGraphNode):
@@ -300,11 +320,16 @@ class Translator:
 	def linearize_execution(self):
 	
 		for node in self.IR_graph.preorder(self.IR_graph.root_node):
+			collect_children = False
+
 			for child in node.children:	
 				if type(child) is BranchGraphNode:
-					pass
+					collect_children = True
 
-
+			new_children = []
+			if collect_children:
+				pass	
+			
 	def extract_functions(self):
 		pass
 
@@ -318,8 +343,7 @@ class Translator:
 		---------------------------------------------------------------------------------------------------
  	'''
 	def visit_Assign(self, node):
-		self.IR_graph.add_node(RegularGraphNode(lua_node=node, id=self.node_count))
-		self.node_count += 1
+		self.IR_graph.add_node(RegularGraphNode(lua_node=node))
 
 	'''
 		Because of the execution environment, all local assignements will be converted to global assignments
@@ -329,8 +353,7 @@ class Translator:
 		self.visit_Assign(node)
   
 	def visit_SemiColon(self, node):
-		self.IR_graph.add_node(RegularGraphNode(lua_node=node, id=self.node_count))
-		self.node_count += 1
+		self.IR_graph.add_node(RegularGraphNode(lua_node=node))
 
 	def visit_Return(self, node):
 		raise NotImplementedError()
@@ -365,8 +388,7 @@ class Translator:
  	'''
 	# def visit_ElseIf(self, node):
 	# 	logging.debug(f"Visited ElseIf")
-	# 	self.IR_graph.add_node(ConditionalGraphNode(lua_node=node, id=self.node_count))
-	# 	self.node_count += 1
+	# 	self.IR_graph.add_node(ConditionalGraphNode(lua_node=node))
   
 		# self.visit(node.body)
 		# self.visit(node.orelse)
@@ -374,38 +396,41 @@ class Translator:
 	def visit_If(self, node):
 		logging.debug(f"Visited If")
 		
-		branch_nodes = [ConditionalGraphNode(lua_node=node, id=self.node_count)]
-		self.node_count += 1
+		branch_nodes = [ConditionalGraphNode(lua_node=node)]
+
+		else_statement_present = False
   
 		lookahead_node = node.orelse
 		while(type(lookahead_node) == luaparser.astnodes.ElseIf):
 			logging.debug(f"Found ElseIf")
-			branch_nodes.append(ConditionalGraphNode(lua_node=lookahead_node, id=self.node_count))
-			self.node_count += 1
+			branch_nodes.append(ConditionalGraphNode(lua_node=lookahead_node))
 			lookahead_node = lookahead_node.orelse
-
-		# Is there a closing else statement
 		if(lookahead_node is not None):
 			logging.debug(f"Found Else")
-			branch_nodes.append(ConditionalGraphNode(lua_node=lookahead_node, id=self.node_count, name="Else"))
-			self.node_count += 1
-		
-		self.IR_graph.add_node(BranchGraphNode(id=self.node_count, branch_nodes=branch_nodes))
-		self.node_count += 1
+			branch_nodes.append(ConditionalGraphNode(lua_node=lookahead_node, name="Else"))
   
-		# self.visit(node.body)
-		# self.visit(node.orelse)
-
+		previous_pointer = self.IR_graph.pointer
+		
+		branch_graph_node = BranchGraphNode(else_statement_present)
+		self.IR_graph.add_node(branch_graph_node)
+  
+  
+		for branch in branch_nodes:
+			self.IR_graph.pointer = branch_graph_node
+			self.IR_graph.add_node(branch)
+   
+		self.IR_graph.pointer = previous_pointer
+  
 	'''
 		---------------------------------------------------------------------------------------------------
-		Function definition/calling nodes
+		Function nodes
 		---------------------------------------------------------------------------------------------------
  	'''
 	def visit_Function(self, node):
 		logging.debug(f"Visited {node.name.id} with arguments {node.args}")
 		if self.function_count > 0:
 			raise Exception("Error: More than one function defined. Scripts should only contain one function definition.")
-		
+	
 		self.function_count += 1
 		self.main_function_name = node.name.id
 		logging.info(f"Found main function {self.main_function_name}")
@@ -413,8 +438,7 @@ class Translator:
 		# We are now traversing inside the main function
 		self.inside_main_function = True
   
-		self.IR_graph.add_node(RegularGraphNode(lua_node=node, id=self.node_count))
-		self.node_count += 1
+		self.IR_graph.add_node(RegularGraphNode(lua_node=node))
 
 		self.visit(node.body)
 
@@ -428,12 +452,10 @@ class Translator:
 		# Find await() calls
 		if node.func.id == 'await':
 			logging.info(f"Await call found. Function: {node.args[0].func.id}")
-			self.IR_graph.add_node(AsyncGraphNode(lua_node=node, id=self.node_count))
-			self.node_count += 1
+			self.IR_graph.add_node(AsyncGraphNode(lua_node=node))
 		else:
 			# Regular function call
-			self.IR_graph.add_node(RegularGraphNode(lua_node=node, id=self.node_count))
-			self.node_count += 1
+			self.IR_graph.add_node(RegularGraphNode(lua_node=node))
 
 	'''
 		---------------------------------------------------------------------------------------------------
