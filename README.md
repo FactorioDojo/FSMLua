@@ -1,6 +1,6 @@
 # FSMLua
 
-This project aims to provide asynchronous execution to Factorio lua code. This is achieved by translating given Lua code, to an event-based finite state machine. This tool is primarily designed for Foyager.
+This project aims to provide asynchronous execution to Factorio lua code. This is achieved by translating given Lua code to an event-based finite state machine. This tool is primarily designed for Foyager.
 
 ## Background
 

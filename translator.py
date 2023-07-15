@@ -10,13 +10,15 @@ from graphviz import Digraph
 from typing import List
 import coloredlogs, logging
 
+import copy
+
 # windows only
 if os.name == 'nt':
 	os.environ["PATH"] += os.pathsep + 'C:/Program Files/Graphviz/bin/'
  
 os.environ["COLOREDLOGS_LOG_FORMAT"] ='[%(hostname)s] %(funcName)s :: %(levelname)s :: %(message)s'
 
-coloredlogs.install(level='DEBUG')
+coloredlogs.install(level='INFO')
 
 '''
 	Converts lua code to an event-driven finite state machine (substitute for coroutines)
@@ -45,6 +47,15 @@ class GraphNode:
 		self.parent = None
 		self.children = []
 
+	def __copy__(self):
+		cls = self.__class__
+		result = cls.__new__(cls)
+		result.id = -1
+		result.lua_node = self.lua_node
+		result.name = self.name
+		result.parent = None
+		result.children = []
+		return result
 
 	def add_child(self, child):
 		child.parent = self
@@ -54,6 +65,9 @@ class GraphNode:
 		for child in children:
 			child.parent = self
 		self.children.extend(children)
+   
+	def remove_child(self, removed_child):
+		self.children = [child for child in self.children if child is not removed_child]
    
 	def remove_children(self, removed_children):
 		self.children = [child for child in self.children if child not in removed_children]
@@ -140,7 +154,7 @@ class IRGraph:
 		graph_node.id = self.node_count
 		self.node_count += 1
   
-		logging.debug(f"Adding node {graph_node.name} to parent node {self.pointer.name}")
+		logging.debug(f"Adding node {graph_node.name} {graph_node.id} to parent node {self.pointer.name} {graph_node.id}")
 		self.pointer.add_child(graph_node)
 
 		self.pointer = graph_node
@@ -157,9 +171,36 @@ class IRGraph:
    
 		del old_node
 
+	def remove_node(self, removed_node):
+		removed_node.parent.remove_child(removed_node)
+
+	def _remove_node(self):
+		pass
+
+	def copy_tree(self, src_node, destination_node):
+		previous_pointer = self.pointer
+		self.pointer = destination_node
+  
+		self._copy_tree(src_node)
+  
+		self.pointer = previous_pointer
+  
+	def _copy_tree(self, node):
+		copied_node = copy.copy(node)
+		self.add_node(copied_node)
+
+		if len(node.children) > 1: 
+			for child in node.children:
+				self.pointer = copied_node
+				self._copy_tree(child)
+		elif len(node.children) == 1:
+			self._copy_tree(node.children[0])
+
+
+
 	def get_descendants(self, node):
 		children = []
-		return self._get_descendants(node, children)
+		self._get_descendants(node, children)
 		return children
   
 	def _get_descendants(self, node, children):
@@ -180,7 +221,7 @@ class IRGraph:
 			return
   	
 		for child in node.children:
-			self._get_leaf_nodes(self, child, leaves)
+			self._get_leaf_nodes(child, leaves)
 	 
 	def render_visual_graph(self, output_graph_name, node=None):
   
@@ -262,7 +303,8 @@ class Translator:
   			- Change local assignments to global assignments
 			- TODO: Unroll loops?
 		3. Linearize Execution: 
-			- Find node (x) with a branch child, add other children of (x) to the end of each execution path of the branch child 
+			- Find node (x) with a branch child, add other children of (x) to the end of each execution path of the branch child.
+			- If there is no else statement present, create one
 		4. Extract functions:
 			- Extract and link functions together
 		5. Construct AST:
@@ -286,7 +328,7 @@ class Translator:
 		logging.info(f"Linearizing execution")
 		self.linearize_execution()
 		if self.render_visual_graph: 
-			self.execution_graph.render_visual_graph("Exeuction_graph")
+			self.IR_graph.render_visual_graph("Exeuction_graph")
  
 		logging.info(f"Extracting and linking functions")
 		self.extract_functions()
@@ -304,7 +346,6 @@ class Translator:
 		logging.debug("Expanding nodes")	
 		for node in self.IR_graph.preorder(self.IR_graph.root_node):
 			if type(node) is BranchGraphNode:
-				print(node.children)
 				for branch in node.children:
 					self.IR_graph.pointer = branch
 					if(type(branch) is ConditionalGraphNode):
@@ -316,19 +357,52 @@ class Translator:
 	def modify_assignments(self):
 		pass
 
+		# self.IR_graph.copy_tree(self.IR_graph.root_node.children[0], self.IR_graph.root_node)
 	# Find node (x) with a branch child, add other children of (x) to the end of each execution path of the branch child 
+	# TODO: Insert else if not present (just elifs)
 	def linearize_execution(self):
-	
-		for node in self.IR_graph.preorder(self.IR_graph.root_node):
-			collect_children = False
+		idx = 0
 
-			for child in node.children:	
+		traversal_order = self.IR_graph.postorder(self.IR_graph.root_node)
+		for node in traversal_order:
+   			# Does this node have a branch as a child
+			branch_present = False
+			branch_node = None
+			for child in node.children:
 				if type(child) is BranchGraphNode:
-					collect_children = True
+					branch_present = True
+					branch_node = child
+     
+			# If branch is present, check if there is a second child
+			# This is the code that must be executed after the branch
+			# TODO: This assumes there is a maximum of two children
+			post_exeuction_tree = None
+			if branch_present:
+				for child in node.children:
+					if type(child) is not BranchGraphNode:
+						post_exeuction_tree = child
+						break
+				
+				leaf_nodes = self.IR_graph.get_leaf_nodes(branch_node)
+    
+				# Remove post_execution_tree from leaf nodes
+				leaf_nodes = [node for node in leaf_nodes if node is not post_exeuction_tree]
+				print('Post execution tree', post_exeuction_tree.name, post_exeuction_tree.id)
+				for leaf_node in leaf_nodes:
+					print('Leaf', leaf_node.name, leaf_node.id)
+					self.IR_graph.copy_tree(post_exeuction_tree, leaf_node)
+     
+				self.IR_graph.remove_node(post_exeuction_tree)
+				idx += 1
+				if idx == 3: return
+				traversal_order = self.IR_graph.postorder(self.IR_graph.root_node)
 
-			new_children = []
-			if collect_children:
-				pass	
+     
+
+				
+  
+			
+
 			
 	def extract_functions(self):
 		pass
