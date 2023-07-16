@@ -4,6 +4,7 @@
 """
 
 import random
+import string
 import uuid
 
 class RandomUtil():
@@ -24,6 +25,11 @@ class RandomUtil():
             self.function_names.append(func_name)
         
         return func_name
+    
+    def generate_id(self):
+        id_length = 6
+        characters = string.ascii_lowercase + string.ascii_uppercase + string.digits
+        return ''.join(self.rnd.choices(characters, k=id_length))
     
    # For other stuff 
     def generate_x(self):
