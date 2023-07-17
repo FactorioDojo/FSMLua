@@ -2,6 +2,7 @@ import os
 
 import luaparser
 import luaparser.ast as ast
+import luaparser.astnodes as astnodes
 from luaparser.astnodes import *
 from luaparser.astnodes import Node
 
@@ -81,25 +82,46 @@ class GraphNode:
 
 
 '''
+################################################
+	REGULAR IR NODES
+################################################
+'''
+
+'''
 	Regular graph nodes are any sort of exeuction that does not introduce differing levels of heirarchy or asynchronous calls
+	and do not require any modification
 '''
 class RegularGraphNode(GraphNode):
 	def __init__(self, lua_node):
 		super().__init__(lua_node)
 
 '''
-
+	Local assignments (to be converted to global assignments)
 '''
 class LocalAssignGraphNode(RegularGraphNode):
 	def __init__(self, lua_node):
 		super().__init__(lua_node)
 
 '''
-	Regular graph nodes are any sort of exeuction that does not introduce differing levels of heirarchy or asynchronous calls
+	Regular assignments (to be converted to global assignments)
+'''
+class RegularAssignGraphNode(RegularGraphNode):
+	def __init__(self, lua_node):
+		super().__init__(lua_node)
+
+'''
+	Global assignments
 '''
 class GlobalAssignGraphNode(RegularGraphNode):
 	def __init__(self, lua_node):
 		super().__init__(lua_node)
+
+
+'''
+################################################
+	ASYNC IR NODES
+################################################
+'''
 
 '''
 	Asynchronous nodes
@@ -109,6 +131,17 @@ class AsyncGraphNode(GraphNode):
 		super().__init__(lua_node)
 		self.name = '(async) ' + lua_node._name 
 
+class AsyncAssignGraphNode(AsyncGraphNode):
+	def __init__(self, lua_node):
+		super().__init__(lua_node)
+
+
+'''
+################################################
+	CONDITIONAL IR NODES
+################################################
+'''
+
 '''
 	Conditional graph nodes contain all statements related to an if statement.
 '''
@@ -116,10 +149,6 @@ class ConditionalGraphNode(GraphNode):
 	def __init__(self, lua_node, name=""):
 		super().__init__(lua_node)
 		if name != "": self.name = name
-	
-class LoopGraphNode(GraphNode):
-	def __init__(self, lua_node):
-		super().__init__(lua_node)
 
 '''
 	Intermediate reprsentation for conditionals. This node will contain each elseif/else statement.
@@ -131,6 +160,22 @@ class BranchGraphNode(GraphNode):
 		self.else_statement_present = else_statement_present
   
 '''
+################################################
+	LOOP IR NODES
+################################################
+'''
+class LoopGraphNode(GraphNode):
+	def __init__(self, lua_node):
+		super().__init__(lua_node)
+
+
+'''
+################################################
+	COMPILATION IR NODES
+################################################
+'''
+
+'''
 	Links IR graphs together, dst_node will be the root node of another IR graph
 '''
 class LinkGraphNode(GraphNode):
@@ -138,7 +183,10 @@ class LinkGraphNode(GraphNode):
 		super().__init__(lua_node=None)
 		self.name = "Link\n" + linked_graph.generated_name[0:8] + "..."
 		self.linked_graph = linked_graph 
- 
+
+'''
+	Placeholder for a new function node
+'''
 class PlaceholderFunctionGraphNode(GraphNode):
 	def __init__(self, generated_function_name):
 		super().__init__(lua_node=None)
@@ -294,14 +342,14 @@ class Translator:
 		self.IR_graph = IRGraph() 
 		self.exeuction_IR_graphs = []
 		
-		# Unpacking flags
-		self.unpack_conditionals = False
-		self.unpack_loops = False
 
-		# Main function	
+		# Main function tracking	
 		self.main_function_name = None
 		self.function_count = 0
 		self.inside_main_function = False
+  
+		# Variable reference tracking
+		self.variable_refs = {}
 
 	'''
 		Translating is done as follows:
@@ -312,18 +360,19 @@ class Translator:
 			-- 1b. For each branch set it as root and goto 1a.
 		2. Modify Assignments: 
   			- Change local assignments to global assignments
-			- TODO: Unpack assignments in conditionals/loops if they are an async assignment?
-			- TODO: Unroll loops?
-		3. Construct Execution Graph: 
+			- Track all variables in variable reference table
+		3. Modify branches:
+			- Unpack assignments in conditionals
+			- If there is no else statement present, create one and put the post execution tree under the new else node
+		4. Construct Execution Graphs: 
 			- Linearize:
 			-- Find node (x) with a branch child, add other children of (x) to a new IR graph, then append it to the end 
    			of each execution path of the branch child as a link node.
-			-- If there is no else statement present, create one
 			- Separate:
 			-- Find async node (x), add children of (x) to new IR graph, replace child of (x) with link to new IR graph
-		4. Extract functions:
+		5. Extract functions:
 			- Extract and link functions together
-		5. Construct AST:
+		6. Construct AST:
 			- Secrete a new lua AST
 	'''
 	def translate(self):
@@ -368,8 +417,43 @@ class Translator:
 					elif(type(branch) is BranchGraphNode):
 						raise NotImplementedError("Nested branches")
 
-	# TODO
 	def modify_assignments(self):
+		# First, traverse the graph and change local assignments to global assignments
+		self.modify_assignments_visitor(self.graph)
+
+		# Second, traverse the graph again and update variable references
+		self.update_references_visitor(self.graph)
+
+	def modify_assignments_visitor(self, node):
+		# If the node is an assignment node
+		if isinstance(node, RegularGraphNode) and isinstance(node.lua_node, (astnodes.Assign, astnodes.LocalAssign)):
+			# Change the node type to a global assignment
+			node.__class__ = GlobalAssignGraphNode
+			# Add the variables to the modified_vars set
+			for target in node.lua_node.targets:
+				if isinstance(target, astnodes.Name):
+					self.modified_vars.add(target.id)
+
+		# Visit the child nodes
+		for child in node.children:
+			self.modify_assignments_visitor(child)
+
+	def update_references_visitor(self, node):
+		# If the node is an expression node that references a variable
+		if isinstance(node, RegularGraphNode) and isinstance(node.lua_node, astnodes.Name):
+			# If the variable has been changed to a global variable
+			if node.lua_node.id in self.modified_vars:
+				# Change the reference to a global reference
+				# This will require creating a new node type or modifying the existing node
+				# For example, you might add an attribute to the Name node to indicate that it's a global reference
+				node.lua_node.is_global = True
+
+		# Visit the child nodes
+		for child in node.children:
+			self.update_references_visitor(child)
+
+
+	def modify_branches(self):
 		pass
 
 	'''
@@ -400,7 +484,6 @@ class Translator:
 			# If branch is present, check if there is a second child
 			# This is the code that must be executed after the branch
 			# TODO: This assumes there is a maximum of two children
-			# TODO: Just make one copy and assign references to it. Visually, the copy should stand alone in the visual graph
 			post_exeuction_tree = None
 			if branch_present:
 				logging.debug(f"Found branch {branch_node.id}")
@@ -413,7 +496,6 @@ class Translator:
     
 				# Remove post_execution_tree from leaf nodes
 				leaf_nodes = [node for node in leaf_nodes if node is not post_exeuction_tree]
-				print('Post execution tree', post_exeuction_tree.name, post_exeuction_tree.id)
 
 				# Create a new IR graph
 				exeuction_IR_graph = IRGraph()
@@ -431,7 +513,6 @@ class Translator:
 					# Add link to execution graph
 					self.IR_graph.pointer = leaf_node
 					self.IR_graph.add_node(LinkGraphNode(exeuction_IR_graph))
-					print('Leaf', leaf_node.name, leaf_node.id)
 
 				self.IR_graph.pointer = previous_pointer
     
@@ -439,6 +520,7 @@ class Translator:
 				traversal_order = self.IR_graph.postorder(self.IR_graph.root_node)
 
 			## Seperate
+			# TODO
 
 
    
@@ -454,15 +536,15 @@ class Translator:
 		---------------------------------------------------------------------------------------------------
  	'''
 	def visit_Assign(self, node):
-		self.IR_graph.add_node(RegularGraphNode(lua_node=node))
+		self.IR_graph.add_node(RegularAssignGraphNode(lua_node=node))
 
 	'''
 		Because of the execution environment, all local assignements will be converted to global assignments
 		TODO: Use factorio global table?
 	'''
 	def visit_LocalAssign(self, node):
-		self.visit_Assign(node)
-  
+		self.IR_graph.add_node(LocalAssignGraphNode(lua_node=node))
+	
 	def visit_SemiColon(self, node):
 		self.IR_graph.add_node(RegularGraphNode(lua_node=node))
 
@@ -634,6 +716,16 @@ end
 
 source_code_3 = """
 function doThing()
+		local value = bar()
+		if value == 1 then
+  			await(foo())
+		end
+  		bar()
+end
+"""
+
+source_code_4 = """
+function doThing()
 	local var = bar()
 	if var == thing1 then
 		await(foo())
@@ -658,7 +750,7 @@ end
 """
 
 
-source_code_4 = """
+source_code_5 = """
 function doThing()
 	local var = bar()
 	if var == thing1 then
@@ -696,7 +788,7 @@ end
 """
 
 # Convert the source code to an AST
-source_lua_root_node = ast.parse(source_code_4)
+source_lua_root_node = ast.parse(source_code_3)
 
 #print(ast.to_pretty_str(tree))
 # Create FSM graph
