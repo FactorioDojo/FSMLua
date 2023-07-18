@@ -46,7 +46,7 @@ node_count = 0
 '''
 
 
-class GraphNode:
+class IRGraphNode:
 	def __init__(self, lua_node):
 		self.id = id
 		self.lua_node = lua_node
@@ -91,28 +91,28 @@ class GraphNode:
 	Regular graph nodes are any sort of exeuction that does not introduce differing levels of heirarchy or asynchronous calls
 	and do not require any modification
 '''
-class RegularGraphNode(GraphNode):
+class RegularIRGraphNode(IRGraphNode):
 	def __init__(self, lua_node):
 		super().__init__(lua_node)
 
 '''
 	Local assignments (to be converted to global assignments)
 '''
-class LocalAssignGraphNode(RegularGraphNode):
+class LocalAssignIRGraphNode(RegularIRGraphNode):
 	def __init__(self, lua_node):
 		super().__init__(lua_node)
 
 '''
 	Regular assignments (to be converted to global assignments)
 '''
-class RegularAssignGraphNode(RegularGraphNode):
+class RegularAssignIRGraphNode(RegularIRGraphNode):
 	def __init__(self, lua_node):
 		super().__init__(lua_node)
 
 '''
 	Global assignments
 '''
-class GlobalAssignGraphNode(RegularGraphNode):
+class GlobalAssignIRGraphNode(RegularIRGraphNode):
 	def __init__(self, lua_node):
 		super().__init__(lua_node)
 
@@ -126,12 +126,12 @@ class GlobalAssignGraphNode(RegularGraphNode):
 '''
 	Asynchronous nodes
 '''
-class AsyncGraphNode(GraphNode):
+class AsyncIRGraphNode(IRGraphNode):
 	def __init__(self, lua_node):
 		super().__init__(lua_node)
 		self.name = '(async) ' + lua_node._name 
 
-class AsyncAssignGraphNode(AsyncGraphNode):
+class AsyncAssignIRGraphNode(AsyncIRGraphNode):
 	def __init__(self, lua_node):
 		super().__init__(lua_node)
 
@@ -145,7 +145,7 @@ class AsyncAssignGraphNode(AsyncGraphNode):
 '''
 	Conditional graph nodes contain all statements related to an if statement.
 '''
-class ConditionalGraphNode(GraphNode):
+class ConditionalIRGraphNode(IRGraphNode):
 	def __init__(self, lua_node, name=""):
 		super().__init__(lua_node)
 		if name != "": self.name = name
@@ -153,7 +153,7 @@ class ConditionalGraphNode(GraphNode):
 '''
 	Intermediate reprsentation for conditionals. This node will contain each elseif/else statement.
 '''
-class BranchGraphNode(GraphNode):
+class BranchIRGraphNode(IRGraphNode):
 	def __init__(self, else_statement_present):
 		super().__init__(lua_node=None)
 		self.name = 'Branch'
@@ -164,7 +164,7 @@ class BranchGraphNode(GraphNode):
 	LOOP IR NODES
 ################################################
 '''
-class LoopGraphNode(GraphNode):
+class LoopIRGraphNode(IRGraphNode):
 	def __init__(self, lua_node):
 		super().__init__(lua_node)
 
@@ -178,7 +178,7 @@ class LoopGraphNode(GraphNode):
 '''
 	Links IR graphs together, dst_node will be the root node of another IR graph
 '''
-class LinkGraphNode(GraphNode):
+class LinkIRGraphNode(IRGraphNode):
 	def __init__(self, linked_graph):
 		super().__init__(lua_node=None)
 		self.name = "Link\n" + linked_graph.generated_name[0:8] + "..."
@@ -187,7 +187,7 @@ class LinkGraphNode(GraphNode):
 '''
 	Placeholder for a new function node
 '''
-class PlaceholderFunctionGraphNode(GraphNode):
+class PlaceholderFunctionIRGraphNode(IRGraphNode):
 	def __init__(self, generated_function_name):
 		super().__init__(lua_node=None)
 		self.generated_function_name = generated_function_name
@@ -307,7 +307,7 @@ def _render_visual_graph(visual_graph, node):
 	if node is None: return
 
 	for child in node.children:
-		if type(node) is AsyncGraphNode:
+		if type(node) is AsyncIRGraphNode:
 			visual_graph.edge(f"{node.name} {node.id}", f"{child.name} {child.id}", style="dashed")
 		else:
 			visual_graph.edge(f"{node.name} {node.id}", f"{child.name} {child.id}", style="solid")
@@ -352,41 +352,47 @@ class Translator:
 		self.variable_refs = {}
 
 	'''
-		Translating is done as follows:
-		1. BuildIR:
-			- Build the Intermediate Representation (IR) graph tree
-  			-- 1a. Travsering from the root, find all regular, conditional and loop nodes and add them to the graph linearly 
-	 		(without going into the branches or loops)
-			-- 1b. For each branch set it as root and goto 1a.
-		2. Modify Assignments: 
-  			- Change local assignments to global assignments
-			- Track all variables in variable reference table
-		3. Modify branches:
-			- Unpack assignments in conditionals
-			- If there is no else statement present, create one and put the post execution tree under the new else node
-		4. Construct Execution Graphs: 
-			- Linearize:
-			-- Find node (x) with a branch child, add other children of (x) to a new IR graph, then append it to the end 
-   			of each execution path of the branch child as a link node.
-			- Separate:
-			-- Find async node (x), add children of (x) to new IR graph, replace child of (x) with link to new IR graph
-		5. Extract functions:
-			- Extract and link functions together
-		6. Construct AST:
-			- Secrete a new lua AST
+	################################################
+		IR TRANSLATION	
+	################################################
+	'''
+
+	'''
+	Translating is done as follows:
+	1. Build IR graph:
+		- Build the Intermediate Representation (IR) graph tree
+		-- 1a. Travsering from the root, find all regular, conditional and loop nodes and add them to the graph linearly 
+		(without going into the branches or loops)
+		-- 1b. For each branch set it as root and goto 1a.
+	2. Modify Assignments: 
+		- Change local assignments to global assignments
+		- Track all variables in variable reference table
+	3. Modify branches:
+		- Unpack assignments in conditionals
+		- If there is no else statement present, create one and put the post execution tree under the new else node
+	4. Construct Execution Graphs: 
+		- Linearize:
+		-- Find node (x) with a branch child, add other children of (x) to a new IR graph, then append it to the end 
+		of each execution path of the branch child as a link node.
+		- Separate:
+		-- Find async node (x), add children of (x) to new IR graph, replace child of (x) with link to new IR graph
+	5. Extract functions:
+		- Extract and link functions together
+	6. Construct AST:
+		- Secrete a new lua AST
 	'''
 	def translate(self):
 		# Stage 1
 		# Build the graph tree 
   
 		logging.info(f"Building IR graph from Lua source")
-		self.buildIR(self.source_lua_root_node)
+		self.build_IR_graph(self.source_lua_root_node)
 		if self.render_visual_graph: 
 			render_visual_graph(output_graph_name="IR_graph", root_nodes=[self.IR_graph.root_node])
 
 
-		logging.info(f"Modifying assignments for IR graph")
-		self.modify_assignments()
+		logging.info(f"Modifying variable assignments and references for IR graph")
+		# self.modify_assignments()
 		if self.render_visual_graph: 
 			render_visual_graph(output_graph_name="Modified_IR_graph", root_nodes=[self.IR_graph.root_node])
  
@@ -401,7 +407,7 @@ class Translator:
 		self.construct_ast()
 
 
-	def buildIR(self, node):
+	def build_IR_graph(self, node):
 		# First collect regular/async statements, branches and loops (without entering)
 		logging.debug("Collecting nodes")	
 		self.visit(node)
@@ -409,26 +415,30 @@ class Translator:
 		# Enter the bodies of if statements and loops
 		logging.debug("Expanding nodes")	
 		for node in self.IR_graph.preorder(self.IR_graph.root_node):
-			if type(node) is BranchGraphNode:
+			if type(node) is BranchIRGraphNode:
 				for branch in node.children:
 					self.IR_graph.pointer = branch
-					if(type(branch) is ConditionalGraphNode):
+					if(type(branch) is ConditionalIRGraphNode):
 						self.visit(branch.lua_node.body)
-					elif(type(branch) is BranchGraphNode):
+					elif(type(branch) is BranchIRGraphNode):
 						raise NotImplementedError("Nested branches")
 
 	def modify_assignments(self):
 		# First, traverse the graph and change local assignments to global assignments
-		self.modify_assignments_visitor(self.graph)
+		self.modify_assignments_visitor(self.IR_graph.root_node)
 
 		# Second, traverse the graph again and update variable references
-		self.update_references_visitor(self.graph)
+		self.update_references_visitor(self.IR_graph.root_node)
 
 	def modify_assignments_visitor(self, node):
 		# If the node is an assignment node
-		if isinstance(node, RegularGraphNode) and isinstance(node.lua_node, (astnodes.Assign, astnodes.LocalAssign)):
-			# Change the node type to a global assignment
-			node.__class__ = GlobalAssignGraphNode
+		if isinstance(node, RegularAssignIRGraphNode, LocalAssignIRGraphNode):
+			# Construct the new lua node
+			global_assign_lua_node = self.construct_global_assign_lua_node()
+   			
+      		# Create a new GlobalAssignIRGraphNode
+			newAssignNode = GlobalAssignIRGraphNode()
+			node.__class__ = GlobalAssignIRGraphNode
 			# Add the variables to the modified_vars set
 			for target in node.lua_node.targets:
 				if isinstance(target, astnodes.Name):
@@ -440,7 +450,7 @@ class Translator:
 
 	def update_references_visitor(self, node):
 		# If the node is an expression node that references a variable
-		if isinstance(node, RegularGraphNode) and isinstance(node.lua_node, astnodes.Name):
+		if isinstance(node, RegularIRGraphNode) and isinstance(node.lua_node, astnodes.Name):
 			# If the variable has been changed to a global variable
 			if node.lua_node.id in self.modified_vars:
 				# Change the reference to a global reference
@@ -477,7 +487,7 @@ class Translator:
 			branch_present = False
 			branch_node = None
 			for child in node.children:
-				if type(child) is BranchGraphNode:
+				if type(child) is BranchIRGraphNode:
 					branch_present = True
 					branch_node = child
      
@@ -488,7 +498,7 @@ class Translator:
 			if branch_present:
 				logging.debug(f"Found branch {branch_node.id}")
 				for child in node.children:
-					if type(child) is not BranchGraphNode:
+					if type(child) is not BranchIRGraphNode:
 						post_exeuction_tree = child
 						break
 				
@@ -501,7 +511,7 @@ class Translator:
 				exeuction_IR_graph = IRGraph()
 				# Append a new function
 				# TODO: Construct lua node for function
-				placeholder_function = PlaceholderFunctionGraphNode(generated_function_name=exeuction_IR_graph.generated_name)
+				placeholder_function = PlaceholderFunctionIRGraphNode(generated_function_name=exeuction_IR_graph.generated_name)
 				exeuction_IR_graph.add_node(placeholder_function)
 				copy_tree(src_node=post_exeuction_tree, dst_graph=exeuction_IR_graph, dst_node=exeuction_IR_graph.pointer)
 				logging.debug(f"Constructed new IR graph with root node {exeuction_IR_graph.root_node.name} {exeuction_IR_graph.root_node.id}")
@@ -512,7 +522,7 @@ class Translator:
 				for leaf_node in leaf_nodes:
 					# Add link to execution graph
 					self.IR_graph.pointer = leaf_node
-					self.IR_graph.add_node(LinkGraphNode(exeuction_IR_graph))
+					self.IR_graph.add_node(LinkIRGraphNode(exeuction_IR_graph))
 
 				self.IR_graph.pointer = previous_pointer
     
@@ -529,6 +539,47 @@ class Translator:
 	def construct_ast(self):
 		pass
 
+	'''
+	################################################
+		LUA AST NODE BUILDERS	
+	################################################
+	'''
+	
+	def construct_global_assign_lua_node():
+		pass
+	
+	def construct_function_lua_node():
+		pass
+
+	'''
+	################################################
+		LUA AST NODE VISITERS
+	################################################
+	'''
+	'''
+		---------------------------------------------------------------------------------------------------
+		Call sorting
+		---------------------------------------------------------------------------------------------------
+ 	'''
+	def visit(self, node):
+		method = 'visit_' + node.__class__.__name__
+		# get correct visit function
+		visitor = getattr(self, method, self.generic_visit)
+		# call visit function with current node
+		return visitor(node)
+
+	def generic_visit(self, node):
+		if isinstance(node, list):
+			for item in node:
+				self.visit(item)
+		elif isinstance(node, Node):
+			logging.debug(f"Generic visit {node._name}")
+			# visit all object public attributes:
+			children = [
+				attr for attr in node.__dict__.keys() if not attr.startswith("_")
+			]
+			for child in children:
+				self.visit(node.__dict__[child])
 
 	'''
 		---------------------------------------------------------------------------------------------------
@@ -536,17 +587,17 @@ class Translator:
 		---------------------------------------------------------------------------------------------------
  	'''
 	def visit_Assign(self, node):
-		self.IR_graph.add_node(RegularAssignGraphNode(lua_node=node))
+		self.IR_graph.add_node(RegularAssignIRGraphNode(lua_node=node))
 
 	'''
 		Because of the execution environment, all local assignements will be converted to global assignments
 		TODO: Use factorio global table?
 	'''
 	def visit_LocalAssign(self, node):
-		self.IR_graph.add_node(LocalAssignGraphNode(lua_node=node))
+		self.IR_graph.add_node(LocalAssignIRGraphNode(lua_node=node))
 	
 	def visit_SemiColon(self, node):
-		self.IR_graph.add_node(RegularGraphNode(lua_node=node))
+		self.IR_graph.add_node(RegularIRGraphNode(lua_node=node))
 
 	def visit_Return(self, node):
 		raise NotImplementedError()
@@ -581,7 +632,7 @@ class Translator:
  	'''
 	# def visit_ElseIf(self, node):
 	# 	logging.debug(f"Visited ElseIf")
-	# 	self.IR_graph.add_node(ConditionalGraphNode(lua_node=node))
+	# 	self.IR_graph.add_node(ConditionalIRGraphNode(lua_node=node))
   
 		# self.visit(node.body)
 		# self.visit(node.orelse)
@@ -589,22 +640,22 @@ class Translator:
 	def visit_If(self, node):
 		logging.debug(f"Visited If")
 		
-		branch_nodes = [ConditionalGraphNode(lua_node=node)]
+		branch_nodes = [ConditionalIRGraphNode(lua_node=node)]
 
 		else_statement_present = False
   
 		lookahead_node = node.orelse
 		while(type(lookahead_node) == luaparser.astnodes.ElseIf):
 			logging.debug(f"Found ElseIf")
-			branch_nodes.append(ConditionalGraphNode(lua_node=lookahead_node))
+			branch_nodes.append(ConditionalIRGraphNode(lua_node=lookahead_node))
 			lookahead_node = lookahead_node.orelse
 		if(lookahead_node is not None):
 			logging.debug(f"Found Else")
-			branch_nodes.append(ConditionalGraphNode(lua_node=lookahead_node, name="Else"))
+			branch_nodes.append(ConditionalIRGraphNode(lua_node=lookahead_node, name="Else"))
   
 		previous_pointer = self.IR_graph.pointer
 		
-		branch_graph_node = BranchGraphNode(else_statement_present)
+		branch_graph_node = BranchIRGraphNode(else_statement_present)
 		self.IR_graph.add_node(branch_graph_node)
   
   
@@ -631,7 +682,7 @@ class Translator:
 		# We are now traversing inside the main function
 		self.inside_main_function = True
   
-		self.IR_graph.add_node(RegularGraphNode(lua_node=node))
+		self.IR_graph.add_node(RegularIRGraphNode(lua_node=node))
 
 		self.visit(node.body)
 
@@ -645,10 +696,10 @@ class Translator:
 		# Find await() calls
 		if node.func.id == 'await':
 			logging.info(f"Await call found. Function: {node.args[0].func.id}")
-			self.IR_graph.add_node(AsyncGraphNode(lua_node=node))
+			self.IR_graph.add_node(AsyncIRGraphNode(lua_node=node))
 		else:
 			# Regular function call
-			self.IR_graph.add_node(RegularGraphNode(lua_node=node))
+			self.IR_graph.add_node(RegularIRGraphNode(lua_node=node))
 
 	'''
 		---------------------------------------------------------------------------------------------------
@@ -666,31 +717,6 @@ class Translator:
 
 	def visit_Method(self, node):
 		raise Exception("Error: Defining object methods is not supported.")
-
-	'''
-		---------------------------------------------------------------------------------------------------
-		Call sorting
-		---------------------------------------------------------------------------------------------------
- 	'''
-	def visit(self, node):
-		method = 'visit_' + node.__class__.__name__
-		# get correct visit function
-		visitor = getattr(self, method, self.generic_visit)
-		# call visit function with current node
-		return visitor(node)
-
-	def generic_visit(self, node):
-		if isinstance(node, list):
-			for item in node:
-				self.visit(item)
-		elif isinstance(node, Node):
-			logging.debug(f"Generic visit {node._name}")
-			# visit all object public attributes:
-			children = [
-				attr for attr in node.__dict__.keys() if not attr.startswith("_")
-			]
-			for child in children:
-				self.visit(node.__dict__[child])
 
 
 # Given Lua source code
@@ -788,7 +814,7 @@ end
 """
 
 # Convert the source code to an AST
-source_lua_root_node = ast.parse(source_code_3)
+source_lua_root_node = ast.parse(source_code_5)
 
 #print(ast.to_pretty_str(tree))
 # Create FSM graph
