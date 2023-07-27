@@ -390,12 +390,11 @@ class Translator:
 		if self.render_visual_graph: 
 			render_visual_graph(output_graph_name="IR_graph", root_nodes=[self.IR_graph.root_node])
 
-
-		logging.info(f"Modifying variable assignments and references for IR graph")
+		logging.info("Modifying assignments and updating variable references")
 		# self.modify_assignments()
-		if self.render_visual_graph: 
-			render_visual_graph(output_graph_name="Modified_IR_graph", root_nodes=[self.IR_graph.root_node])
- 
+		if self.render_visual_graph:
+			render_visual_graph(output_graph_name="Modified_assignments_IR_graph", root_nodes=[self.IR_graph.root_node])
+		
 		logging.info(f"Constructing execution graph")
 		self.construct_execution_graphs()
 		if self.render_visual_graph: 
@@ -422,6 +421,7 @@ class Translator:
 						self.visit(branch.lua_node.body)
 					elif(type(branch) is BranchIRGraphNode):
 						raise NotImplementedError("Nested branches")
+
 
 	def modify_assignments(self):
 		# First, traverse the graph and change local assignments to global assignments
@@ -463,9 +463,6 @@ class Translator:
 			self.update_references_visitor(child)
 
 
-	def modify_branches(self):
-		pass
-
 	'''
 	3. Construct Execution Graph: 
 		- Linearize:
@@ -482,7 +479,6 @@ class Translator:
 		## Linearize
 		traversal_order = self.IR_graph.postorder(self.IR_graph.root_node)
 		for node in traversal_order:
-			print(node)
    			# Does this node have a branch as a child
 			branch_present = False
 			branch_node = None
@@ -490,9 +486,18 @@ class Translator:
 				if type(child) is BranchIRGraphNode:
 					branch_present = True
 					branch_node = child
-     
-			# If branch is present, check if there is a second child
-			# This is the code that must be executed after the branch
+    
+			'''
+				Modify Branches:
+				- Find Nonterminal Conditional Branches (NCBs), that is branches that do not contain an else statement.
+					-- When linearizing, code that is executed after the if statement is appended to each conditional in the branch. This creates a problem in the following case:
+					* The code is linearized
+					* There is code after the branch (post conditional exeuction tree)
+					* The branch does not contain an else statement
+					* All conditionals of the branch evaluate to false
+					The linearized post conditional exeuction tree will never be executed. We can fix this by copying the tree to a new artificially created
+					'else' conditional node under the NCB.
+			'''
 			# TODO: This assumes there is a maximum of two children
 			post_exeuction_tree = None
 			if branch_present:
@@ -814,7 +819,7 @@ end
 """
 
 # Convert the source code to an AST
-source_lua_root_node = ast.parse(source_code_5)
+source_lua_root_node = ast.parse(source_code_3)
 
 #print(ast.to_pretty_str(tree))
 # Create FSM graph
