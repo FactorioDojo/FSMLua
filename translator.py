@@ -48,7 +48,7 @@ node_count = 0
 
 class IRGraphNode:
 	def __init__(self, lua_node):
-		self.id = id
+		self.id = -1
 		self.lua_node = lua_node
 		if lua_node:
 			self.name = lua_node._name
@@ -129,7 +129,7 @@ class GlobalAssignIRGraphNode(RegularIRGraphNode):
 class AsyncIRGraphNode(IRGraphNode):
 	def __init__(self, lua_node):
 		super().__init__(lua_node)
-		self.name = '(async) ' + lua_node._name 
+		self.name = lua_node._name + ' (async)'
 
 class AsyncAssignIRGraphNode(AsyncIRGraphNode):
 	def __init__(self, lua_node):
@@ -181,7 +181,7 @@ class LoopIRGraphNode(IRGraphNode):
 class LinkIRGraphNode(IRGraphNode):
 	def __init__(self, linked_graph):
 		super().__init__(lua_node=None)
-		self.name = "Link\n" + linked_graph.generated_name[0:8] + "..."
+		self.name = "Link (Generated)\n" + linked_graph.generated_name[0:8] + "..."
 		self.linked_graph = linked_graph 
 
 '''
@@ -191,7 +191,15 @@ class PlaceholderFunctionIRGraphNode(IRGraphNode):
 	def __init__(self, generated_function_name):
 		super().__init__(lua_node=None)
 		self.generated_function_name = generated_function_name
-		self.name = "Function\n" + generated_function_name[0:8] + "..."
+		self.name = "Function (Generated)\n" + generated_function_name[0:8] + "..."
+ 
+'''
+	Placeholder for new else node
+'''
+class PlaceholderConditionalElseIRGraphNode(IRGraphNode):
+	def __init__(self):
+		super().__init__(lua_node=None)
+		self.name = "Else (Generated)"
   
 class IRGraph:
 	def __init__(self, root_node=None):
@@ -469,48 +477,77 @@ class Translator:
 		-- Find node (x) with a branch child, add other children of (x) to a new IR graph, then append it to the end 
 		of each execution path of the branch child as a link node.
 		-- If there is no else statement present, create one
-		# TODO: Insert else if not present (just elifs)
 		- Separate:
 		-- Find async node (x), add children of (x) to new IR graph, replace child of (x) with link to new IR graph
 	'''
 	def construct_execution_graphs(self):
 		# TODO: Resetting the traversal order seems chronically stupid
 
-		## Linearize
+		## Linearize ##
 		traversal_order = self.IR_graph.postorder(self.IR_graph.root_node)
+  
 		for node in traversal_order:
-   			# Does this node have a branch as a child
+   			# Check if node has a branch as a child
 			branch_present = False
 			branch_node = None
 			for child in node.children:
 				if type(child) is BranchIRGraphNode:
+					# for x in child.children:
+					# 	print(x.lua_node)
+					# 	if type(x.lua_node) is luaparser.astnodes.Block:
+					# 		print(x.lua_node.body)
+					# 		exit()
 					branch_present = True
 					branch_node = child
     
-			'''
-				Modify Branches:
-				- Find Nonterminal Conditional Branches (NCBs), that is branches that do not contain an else statement.
-					-- When linearizing, code that is executed after the if statement is appended to each conditional in the branch. This creates a problem in the following case:
-					* The code is linearized
-					* There is code after the branch (post conditional exeuction tree)
-					* The branch does not contain an else statement
-					* All conditionals of the branch evaluate to false
-					The linearized post conditional exeuction tree will never be executed. We can fix this by copying the tree to a new artificially created
-					'else' conditional node under the NCB.
-			'''
-			# TODO: This assumes there is a maximum of two children
+
+			# TODO: This assumes there is a maximum of two children on the parent node of the branch
+			
+			# The post exeuction tree are nodes that execute after the nodes in the branch
 			post_exeuction_tree = None
+
 			if branch_present:
+				# Find the post exeuction tree (if present)
 				logging.debug(f"Found branch {branch_node.id}")
+				if len(node.children) > 2:
+					logging.error(f"More than 2 children in node {node.name} {node.id}")
 				for child in node.children:
 					if type(child) is not BranchIRGraphNode:
 						post_exeuction_tree = child
 						break
 				
+				# Continue if there is no post exeuction tree (not present or branch has already been linearized)
+				if post_exeuction_tree is None:
+					continue
+				
+  
+				'''
+				Modify Branches:
+				- Find Nonterminal Conditional Branches (NCBs), that is branches that do not contain an else statement.
+					-- When linearizing, code that is executed after the if statement is appended to each conditional in the branch. This creates a problem in the following case:
+					* The code is linearized
+					* There is code after the branch (post exeuction tree)
+					* The branch does not contain an else statement
+					* All conditionals of the branch evaluate to false
+					The linearized post exeuction tree will never be executed. We can fix this by copying the tree to a new artificially created
+					'else' conditional node under the NCB. 
+				'''
+
+				if not branch_node.else_statement_present:
+					# Construct a placeholder node
+					placeholder_else_node = PlaceholderConditionalElseIRGraphNode()
+					previous_pointer = self.IR_graph.pointer
+					self.IR_graph.pointer = branch_node
+					self.IR_graph.add_node(placeholder_else_node)
+					self.IR_graph.pointer = previous_pointer
+	
 				leaf_nodes = self.IR_graph.get_leaf_nodes(branch_node)
-    
+				for n in leaf_nodes:
+					print(f"{n.name} {n.id}")
+
+				# TODO: Why was this here?
 				# Remove post_execution_tree from leaf nodes
-				leaf_nodes = [node for node in leaf_nodes if node is not post_exeuction_tree]
+				# leaf_nodes = [node for node in leaf_nodes if node is not post_exeuction_tree]
 
 				# Create a new IR graph
 				exeuction_IR_graph = IRGraph()
@@ -549,7 +586,14 @@ class Translator:
 		LUA AST NODE BUILDERS	
 	################################################
 	'''
-	
+
+	'''
+		Else nodes are list<Statement>
+  	'''
+	def construct_else_lua_node():
+		pass
+		# return astnodes.
+ 
 	def construct_global_assign_lua_node():
 		pass
 	
@@ -656,6 +700,7 @@ class Translator:
 			lookahead_node = lookahead_node.orelse
 		if(lookahead_node is not None):
 			logging.debug(f"Found Else")
+			else_statement_present = True
 			branch_nodes.append(ConditionalIRGraphNode(lua_node=lookahead_node, name="Else"))
   
 		previous_pointer = self.IR_graph.pointer
@@ -752,6 +797,13 @@ function doThing()
   			await(foo())
 		end
   		bar()
+		local x = 2
+		doThing()
+		if value == 2 then
+			value = 3
+		else
+			value = 4
+		end
 end
 """
 
@@ -793,6 +845,9 @@ function doThing()
 			car()
 		else
 			await(far())
+			doThing()
+			local x = 3
+			doOtherThing()
 		end
 		bar()
 	else
