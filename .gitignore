@@ -5,4 +5,5 @@ __pycache__/
 *$py.class_pycache__
 
 .venv
+.local
 /out
