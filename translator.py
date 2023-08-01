@@ -254,9 +254,10 @@ class GeneratedIRGraphNode(IRGraphNode):
 '''
 	Helper node for statements with bodies
 '''
-class GeneratedIRBodyGraphNode(IRGraphNode):
-	def __init__(self, lua_node):
+class GeneratedIRBlockGraphNode(IRGraphNode):
+	def __init__(self, lua_node=None):
 		super().__init__(lua_node)
+		self.name = "Block"
 
 '''
 	Links IR graphs together, dst_node will be the root node of another IR graph
@@ -609,8 +610,16 @@ class Translator:
 		elif isinstance(node, LoopIRGraphNode):
 			self.IR_graph.pointer = node
 			if isinstance(node, FornumIRGraphNode):
+				self.IR_graph.add_node(GeneratedIRBlockGraphNode())
+				self.visit(node.lua_node.body)
+			if isinstance(node, ForinIRGraphNode):
+				self.IR_graph.add_node(GeneratedIRBlockGraphNode())
 				self.visit(node.lua_node.body)
 			if isinstance(node, WhileIRGraphNode):
+				self.IR_graph.add_node(GeneratedIRBlockGraphNode())
+				self.visit(node.lua_node.body)
+			if isinstance(node, RepeatIRGraphNode):
+				self.IR_graph.add_node(GeneratedIRBlockGraphNode())
 				self.visit(node.lua_node.body)
 		for child in node.children:
 			self.expand_nodes(child)
@@ -901,14 +910,15 @@ class Translator:
 			else_statement_present = True
 			conditional_nodes.append(ConditionalIRGraphNode(lua_node=lookahead_node, name="Else"))
   
-		# previous_pointer = self.IR_graph.pointer
-		
 		branch_graph_node = GeneratedBranchIRGraphNode(else_statement_present)
+
 		self.IR_graph.add_node(branch_graph_node)
-  
-  
+		
+		# Add block for body
+		body_block_node = GeneratedIRBlockGraphNode()
+		self.IR_graph.add_node(body_block_node)
 		for conditional_node in conditional_nodes:
-			self.IR_graph.pointer = branch_graph_node
+			self.IR_graph.pointer = body_block_node
 			self.IR_graph.add_node(conditional_node)
    
 		self.IR_graph.pointer = branch_graph_node
