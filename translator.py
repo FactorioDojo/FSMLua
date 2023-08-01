@@ -225,15 +225,20 @@ class WhileIRGraphNode(LoopIRGraphNode):
 class RepeatIRGraphNode(LoopIRGraphNode):
 	def __init__(self, lua_node):
 		super().__init__(lua_node)
-  
+
+'''
+	The generic for loop allows you to traverse all values returned by an iterator function.
+'''  
 class ForinIRGraphNode(LoopIRGraphNode):
 	def __init__(self, lua_node):
 		super().__init__(lua_node)
-
+'''
+	The numeric for loop works as usual. 
+	All three expressions in the declaration of the for loop are evaluated once, before the loop starts. 
+'''
 class FornumIRGraphNode(LoopIRGraphNode):
 	def __init__(self, lua_node):
 		super().__init__(lua_node)
-		self.name = "Fornum"
 
 '''
 ################################################
@@ -242,6 +247,14 @@ class FornumIRGraphNode(LoopIRGraphNode):
 '''
 
 class GeneratedIRGraphNode(IRGraphNode):
+	def __init__(self, lua_node):
+		super().__init__(lua_node)
+
+
+'''
+	Helper node for statements with bodies
+'''
+class GeneratedIRBodyGraphNode(IRGraphNode):
 	def __init__(self, lua_node):
 		super().__init__(lua_node)
 
@@ -526,6 +539,12 @@ class Translator:
 		if self.render_visual_graph: 
 			render_visual_graph(output_graph_name="IR_graph", root_nodes=[self.IR_graph.root_node])
 
+
+		logging.info(f"Expanding IR graph")
+		self.expand_nodes(self.IR_graph.root_node)
+		if self.render_visual_graph: 
+			render_visual_graph(output_graph_name="Expanded_IR_graph", root_nodes=[self.IR_graph.root_node])
+
 		# logging.info("Modifying assignments to global assignments")
 		# # self.modify_assignments(self.IR_graph.root_node)
 		# if self.render_visual_graph:
@@ -562,16 +581,40 @@ class Translator:
 		logging.debug("Collecting nodes")	
 		self.visit(node)
 
-		# Enter the bodies of if statements and loops
-		# logging.debug("Expanding branch nodes")	
+		# logging.debug("Expanding nodes")	
 		# for node in self.IR_graph.preorder(self.IR_graph.root_node):
-		# 	if isinstance(node, BranchIRGraphNode):
+		# 	if isinstance(node, GeneratedBranchIRGraphNode):
 		# 		for branch in node.children:
 		# 			self.IR_graph.pointer = branch
 		# 			if isinstance(branch, ConditionalIRGraphNode):
 		# 				self.visit(branch.lua_node.body)
 		# 			elif isinstance(branch, BranchIRGraphNode):
 		# 				raise NotImplementedError("Nested branches")
+
+	# Enter the bodies of if statements and loops
+	def expand_nodes(self, node):
+		print(node)
+		print(type(node))
+		# If the node is a branch, expand the children
+		if isinstance(node, GeneratedBranchIRGraphNode):
+			for branch in node.children:
+				# If the branch is a conditional, visit it
+				if isinstance(branch, ConditionalIRGraphNode):
+					self.IR_graph.pointer = branch
+					self.visit(branch.lua_node.body)
+				# If the branch is another branch, expand it
+				if isinstance(branch, GeneratedBranchIRGraphNode):
+					self.expand_nodes(branch)
+		# If the node is a loop, expand
+		elif isinstance(node, LoopIRGraphNode):
+			self.IR_graph.pointer = node
+			if isinstance(node, FornumIRGraphNode):
+				self.visit(node.lua_node.body)
+			if isinstance(node, WhileIRGraphNode):
+				self.visit(node.lua_node.body)
+		for child in node.children:
+			self.expand_nodes(child)
+
 
 	# def modify_assignments(self, node):
 	# 	# If the node is an assignment node
@@ -804,14 +847,13 @@ class Translator:
 	def visit_SemiColon(self, node):
 		self.IR_graph.add_node(SemicolonIRGraphNode(lua_node=node))
 
-	
+	def visit_Do(self, node):
+		self.IR_graph.add_node(DoIRGraphNode(lua_node=node))
 	'''
 		---------------------------------------------------------------------------------------------------
 		Loop nodes
 		---------------------------------------------------------------------------------------------------
  	'''
-	def visit_Do(self, node):
-		self.IR_graph.add_node(DoIRGraphNode(lua_node=node))
  
 	def visit_While(self, node):
 		self.IR_graph.add_node(WhileIRGraphNode(lua_node=node))
