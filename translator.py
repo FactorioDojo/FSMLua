@@ -35,14 +35,18 @@ node_count = 0
 	- Handles events inside conditional blocks
 
 	Limitations:
-	- Gotos and labels are not supported
-	- Objects/Methods are not supported
-	- Must track global table of async functions
+	- No recursion
  
 	TODO:
+	- Error handling on invalid syntax
+	- Error handling on detected recursion
+	- Function closure (function inside function)
 	- Loops
  	- Async assignments
-	
+	- Gotos and labels
+ 	- Objects/Methods
+	- Track global table of async functions
+	- Update local and global assignments/references to global table
 '''
 
 
@@ -616,19 +620,10 @@ class Translator:
 				self.IR_graph.pointer = body_block_node
 				self.IR_graph.add_node(conditional_node)
 	
-			# Expand each of the conditionals in the body
+			# Visit each of the conditionals in the body
 			for conditional_node in body_block_node.children:
 				self.IR_graph.pointer = conditional_node
 				self.visit(conditional_node.lua_node.body)
-			# # If the branch is a conditional, visit it
-			# if isinstance(branch, ConditionalIRGraphNode):
-			# 	self.IR_graph.pointer = branch
-			# 	self.visit(branch.lua_node.body)
-			# # If the branch is another branch, expand it
-			# if isinstance(branch, GeneratedBranchIRGraphNode):
-			# 	self.expand_nodes(branch)
-
-
 
 		# If the node is a loop, expand
 		elif isinstance(node, LoopIRGraphNode):
@@ -645,6 +640,8 @@ class Translator:
 			if isinstance(node, RepeatIRGraphNode):
 				self.IR_graph.add_node(GeneratedBlockIRGraphNode())
 				self.visit(node.lua_node.body)
+
+		# Expand each child	
 		for child in node.children:
 			self.expand_nodes(child)
 
