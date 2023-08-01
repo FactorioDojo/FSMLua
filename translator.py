@@ -254,7 +254,7 @@ class GeneratedIRGraphNode(IRGraphNode):
 '''
 	Helper node for statements with bodies
 '''
-class GeneratedIRBlockGraphNode(IRGraphNode):
+class GeneratedBlockIRGraphNode(IRGraphNode):
 	def __init__(self, lua_node=None):
 		super().__init__(lua_node)
 		self.name = "Block"
@@ -283,11 +283,10 @@ class GeneratedFunctionIRGraphNode(GeneratedIRGraphNode):
 	Intermediate reprsentation for conditionals. This node will contain each elseif/else statement.
 '''
 class GeneratedBranchIRGraphNode(GeneratedIRGraphNode):
-	def __init__(self, else_statement_present):
-		super().__init__(lua_node=None)
+	def __init__(self, lua_node):
+		super().__init__(lua_node)
 		self.name = 'Branch (G)'
-		self.else_statement_present = else_statement_present
- 
+		self.else_statement_present = False
 '''
 	Placeholder for new else node
 '''
@@ -418,14 +417,16 @@ def render_visual_graph(output_graph_name, root_nodes):
 	visual_graph.render(output_path, view=False)
 
 def _render_visual_graph(visual_graph, node):
-	if node is None: return
+    if node is None: return
 
-	for child in node.children:
-		if type(node) is AsyncIRGraphNode:
-			visual_graph.edge(f"{node.name} {node.id}", f"{child.name} {child.id}", style="dashed")
-		else:
-			visual_graph.edge(f"{node.name} {node.id}", f"{child.name} {child.id}", style="solid")
-		_render_visual_graph(visual_graph, child)
+    for child in node.children:
+        if type(node) is AsyncIRGraphNode:
+            visual_graph.edge(f"{node.name} {node.id}", f"{child.name} {child.id}", style="dotted")
+        elif type(node) is GeneratedBlockIRGraphNode:
+            visual_graph.edge(f"{node.name} {node.id}", f"{child.name} {child.id}", style="dashed") # Change this to the desired style
+        else:
+            visual_graph.edge(f"{node.name} {node.id}", f"{child.name} {child.id}", style="solid")
+        _render_visual_graph(visual_graph, child)
   
 '''
 	Creates a deep copy of the entire tree under src_node and places it under the dst_node of the dst_graph
@@ -582,15 +583,6 @@ class Translator:
 		logging.debug("Collecting nodes")	
 		self.visit(node)
 
-		# logging.debug("Expanding nodes")	
-		# for node in self.IR_graph.preorder(self.IR_graph.root_node):
-		# 	if isinstance(node, GeneratedBranchIRGraphNode):
-		# 		for branch in node.children:
-		# 			self.IR_graph.pointer = branch
-		# 			if isinstance(branch, ConditionalIRGraphNode):
-		# 				self.visit(branch.lua_node.body)
-		# 			elif isinstance(branch, BranchIRGraphNode):
-		# 				raise NotImplementedError("Nested branches")
 
 	# Enter the bodies of if statements and loops
 	def expand_nodes(self, node):
@@ -598,28 +590,60 @@ class Translator:
 		print(type(node))
 		# If the node is a branch, expand the children
 		if isinstance(node, GeneratedBranchIRGraphNode):
-			for branch in node.children:
-				# If the branch is a conditional, visit it
-				if isinstance(branch, ConditionalIRGraphNode):
-					self.IR_graph.pointer = branch
-					self.visit(branch.lua_node.body)
-				# If the branch is another branch, expand it
-				if isinstance(branch, GeneratedBranchIRGraphNode):
-					self.expand_nodes(branch)
+			# The lua node for the branch holds the "if" lua node
+			# Each subsequent conditional is found in the 'orelse' field
+			if_node = node.lua_node
+
+			# Find all conditional branches
+			conditional_nodes = [ConditionalIRGraphNode(lua_node=if_node)]
+			lookahead_node = if_node.orelse
+			while(isinstance(lookahead_node, luaparser.astnodes.ElseIf)):
+				logging.debug(f"Found ElseIf")
+				conditional_nodes.append(ConditionalIRGraphNode(lua_node=lookahead_node))
+				lookahead_node = lookahead_node.orelse
+			if(lookahead_node is not None):
+				# Else statement is of type list<Statement>
+				logging.debug(f"Found Else")
+				node.else_statement_present = True
+				conditional_nodes.append(ConditionalIRGraphNode(lua_node=lookahead_node, name="Else"))
+
+			
+			# Add block for body
+			body_block_node = GeneratedBlockIRGraphNode()
+			self.IR_graph.pointer = node
+			self.IR_graph.add_node(body_block_node)
+			for conditional_node in conditional_nodes:
+				self.IR_graph.pointer = body_block_node
+				self.IR_graph.add_node(conditional_node)
+	
+			# Expand each of the conditionals in the body
+			for conditional_node in body_block_node.children:
+				self.IR_graph.pointer = conditional_node
+				self.visit(conditional_node.lua_node.body)
+			# # If the branch is a conditional, visit it
+			# if isinstance(branch, ConditionalIRGraphNode):
+			# 	self.IR_graph.pointer = branch
+			# 	self.visit(branch.lua_node.body)
+			# # If the branch is another branch, expand it
+			# if isinstance(branch, GeneratedBranchIRGraphNode):
+			# 	self.expand_nodes(branch)
+
+
+
 		# If the node is a loop, expand
 		elif isinstance(node, LoopIRGraphNode):
 			self.IR_graph.pointer = node
 			if isinstance(node, FornumIRGraphNode):
-				self.IR_graph.add_node(GeneratedIRBlockGraphNode())
+				self.IR_graph.add_node(GeneratedBlockIRGraphNode())
 				self.visit(node.lua_node.body)
 			if isinstance(node, ForinIRGraphNode):
-				self.IR_graph.add_node(GeneratedIRBlockGraphNode())
+				self.IR_graph.add_node(GeneratedBlockIRGraphNode())
 				self.visit(node.lua_node.body)
 			if isinstance(node, WhileIRGraphNode):
-				self.IR_graph.add_node(GeneratedIRBlockGraphNode())
+				self.IR_graph.add_node(GeneratedBlockIRGraphNode())
 				self.visit(node.lua_node.body)
 			if isinstance(node, RepeatIRGraphNode):
-				self.IR_graph.add_node(GeneratedIRBlockGraphNode())
+				self.IR_graph.add_node(GeneratedBlockIRGraphNode())
 				self.visit(node.lua_node.body)
 		for child in node.children:
 			self.expand_nodes(child)
@@ -894,34 +918,9 @@ class Translator:
 		# self.visit(node.orelse)
 
 	def visit_If(self, node):
-		logging.debug(f"Visited If")
-		
-		conditional_nodes = [ConditionalIRGraphNode(lua_node=node)]
+		self.IR_graph.add_node(GeneratedBranchIRGraphNode(lua_node=node))
 
-		else_statement_present = False
-  
-		lookahead_node = node.orelse
-		while(isinstance(lookahead_node, luaparser.astnodes.ElseIf)):
-			logging.debug(f"Found ElseIf")
-			conditional_nodes.append(ConditionalIRGraphNode(lua_node=lookahead_node))
-			lookahead_node = lookahead_node.orelse
-		if(lookahead_node is not None):
-			logging.debug(f"Found Else")
-			else_statement_present = True
-			conditional_nodes.append(ConditionalIRGraphNode(lua_node=lookahead_node, name="Else"))
-  
-		branch_graph_node = GeneratedBranchIRGraphNode(else_statement_present)
 
-		self.IR_graph.add_node(branch_graph_node)
-		
-		# Add block for body
-		body_block_node = GeneratedIRBlockGraphNode()
-		self.IR_graph.add_node(body_block_node)
-		for conditional_node in conditional_nodes:
-			self.IR_graph.pointer = body_block_node
-			self.IR_graph.add_node(conditional_node)
-   
-		self.IR_graph.pointer = branch_graph_node
   
 	'''
 		---------------------------------------------------------------------------------------------------
@@ -1180,7 +1179,7 @@ end
 """
 
 # Convert the source code to an AST
-source_lua_root_node = ast.parse(source_code_7)
+source_lua_root_node = ast.parse(source_code_6)
 
 #print(ast.to_pretty_str(tree))
 # Create FSM graph
