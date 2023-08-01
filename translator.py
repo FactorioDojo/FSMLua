@@ -1,5 +1,7 @@
 import os
 
+import tests.cases as cases
+
 import luaparser
 import luaparser.ast as ast
 import luaparser.astnodes as astnodes
@@ -46,6 +48,7 @@ node_count = 0
 	- Gotos and labels
  	- Objects/Methods
 	- Track global table of async functions
+	- Error handling on missing await()
 	- Update local and global assignments/references to global table
 '''
 
@@ -519,10 +522,10 @@ class Translator:
 		-- 1a. Travsering from the root, find all regular, conditional and loop nodes and add them to the graph linearly 
 		(without going into the branches or loops)
 		-- 1b. For each branch set it as root and goto 1a.
-	2. Modify Assignments: 
+	x. Modify Assignments: 
 		- Change local assignments to global assignments
 		- Track all variables in variable reference table
-	3. Modify branches:
+	x. Modify branches:
 		- Unpack assignments in conditionals
 		- If there is no else statement present, create one and put the post execution tree under the new else node
 	4. Construct Execution Graphs: 
@@ -531,9 +534,9 @@ class Translator:
 		of each execution path of the branch child as a link node.
 		- Separate:
 		-- Find async node (x), add children of (x) to new IR graph, replace child of (x) with link to new IR graph
-	5. Extract functions:
+	x. Extract functions:
 		- Extract and link functions together
-	6. Construct AST:
+	x. Construct AST:
 		- Secrete a new lua AST
 	'''
 	def translate(self):
@@ -973,210 +976,10 @@ class Translator:
 		raise Exception("Error: Defining object methods is not supported.")
 
 
-# Given Lua source code
-source_code_1 = """
-function doThing()
-		bar()
-		await(foo())
-		bar()
-end
-"""
 
-source_code_2 = """
-function doThing()
-		local value = bar()
-		if value == 1 then
-  			await(foo())
-		else
-			bar()
-		end
-		bar()
-end
-"""
-
-source_code_3 = """
-function doThing()
-		local value = bar()
-		if value == 1 then
-  			await(foo())
-		end
-  		bar()
-		local x = 2
-		doThing()
-		if value == 2 then
-			value = 3
-		else
-			value = 4
-		end
-end
-"""
-
-source_code_4 = """
-function doThing()
-	local var = bar()
-	if var == thing1 then
-		await(foo())
-	elseif var == thing2 then
-		bar()
-	elseif var == thing3 then
-		if var == thing4 then
-			car()
-		else
-			await(far())
-		end
-		bar()
-	else
-		car()
-	end
-	bar()
- 	if var == thing1 then
-		await(foo()) 
-	end
-	car()
-end
-"""
-
-
-source_code_5 = """
-function doThing()
-	local var = bar()
-	if var == thing1 then
-		await(foo())
-	elseif var == thing2 then
-		bar()
-	elseif var == thing3 then
-		if var == thing4 then
-			car()
-		else
-			await(far())
-			doThing()
-			local x = 3
-			await(foo())
-			doOtherThing()
-		end
-		bar()
-	else
-		car()
-	end
-	bar() 
- 	if var == thing1 then
-		await(foo())
-	elseif var == thing2 then
-		bar()
-	elseif var == thing3 then
-		if var == thing4 then
-			car()
-		else
-			await(far())
-		end
-		bar()
-	else
-		car()
-	end
-	bar()
- 
-end
-"""
-
-source_code_6 = """
-function doThing()
-	local x = 1
-	local y = 2
-	local z = 3
-	
-	if x == y then
-		await(func1())
-		y = func2()
-	end
-	
-	
-	if a == 3 then
-		func2()
-	elseif a == 4 then
-		func3()
-	elseif a == 5 then
-		func4()
-	elseif a == 6 then
-		func5()
-	elseif a == 7 then
-		func6()
-	end
- 
-	if y == z then
-		func7()
-	end
- 
-	local a = x + y
-	await(foo())
-	await(foo())
-	bar()
-	await(foo())
-	
- 	if x == z then
-		await(func4())
-	end
- 
-	local b = a + 1
-end
- 
-"""
-
-source_code_7 = """
-function exerciseLuaFeatures()
-    -- Declare local and global variables
-    local localVar = 5
-    _G.globalVar = 10
-
-    -- Loops
-    for i=1, 10 do
-        localVar = localVar + i
-    end
-
-    while localVar < 100 do
-        localVar = localVar + 10
-    end
-    
-    repeat
-        localVar = localVar - 10
-    until localVar <= 50
-
-    -- Conditional statements
-    if localVar == 50 then
-        localVar = localVar * 2
-    elseif localVar < 50 then
-        localVar = localVar + 50
-    else
-        localVar = localVar - 50
-    end
-
-    -- Table
-    local tbl = {1, 2, 3, localVar, globalVar, "test"}
-
-    -- Access table
-    local x = tbl[5]
-
-    -- Metatable
-    local meta = { __index = tbl }
-
-    -- Set metatable
-    setmetatable(tbl, meta)
-
-    -- More table
-    local moreTbl = { localVar = localVar, globalVar = _G.globalVar, status = status }
-
-    -- Table iteration
-    for key, value in pairs(moreTbl) do
-        print(key .. ": " .. tostring(value))
-    end
-
-    -- Return values
-    return localVar, _G.globalVar, sum
-end
-
-"""
 
 # Convert the source code to an AST
-source_lua_root_node = ast.parse(source_code_6)
+source_lua_root_node = ast.parse(cases.source_code_8)
 
 #print(ast.to_pretty_str(tree))
 # Create FSM graph
