@@ -60,8 +60,10 @@ class IRGraphNode:
 		self.lua_node = lua_node
 		if lua_node:
 			self.name = lua_node._name
+		self.name_extra = ''
 		self.parent = None
 		self.children = []
+		self.contains_async = False
 
 	def __copy__(self):
 		cls = self.__class__
@@ -155,7 +157,8 @@ class DoIRGraphNode(RegularIRGraphNode):
 class AsyncIRGraphNode(IRGraphNode):
 	def __init__(self, lua_node):
 		super().__init__(lua_node)
-		self.name = lua_node._name + ' (async)'
+		self.name = lua_node._name + ' (A)'
+		self.contains_async = True
 
 '''
 	Asynchronous function calling
@@ -264,7 +267,7 @@ class GeneratedIRGraphNode(IRGraphNode):
 class GeneratedBlockIRGraphNode(IRGraphNode):
 	def __init__(self, lua_node=None):
 		super().__init__(lua_node)
-		self.name = "Block"
+		self.name = "Block (G)"
 
 '''
 	Links IR graphs together, dst_node will be the root node of another IR graph
@@ -272,7 +275,8 @@ class GeneratedBlockIRGraphNode(IRGraphNode):
 class GeneratedLinkIRGraphNode(GeneratedIRGraphNode):
 	def __init__(self, linked_graph):
 		super().__init__(lua_node=None)
-		self.name = "Link (G) " + linked_graph.generated_name[4:10]
+		self.name = "Link " + linked_graph.generated_name[5:10] + " (G)" 
+		self.name_extra = linked_graph.generated_name[4:10]
 		self.linked_graph = linked_graph 
 		if self.linked_graph is None:
 			print("here")
@@ -284,7 +288,8 @@ class GeneratedFunctionIRGraphNode(GeneratedIRGraphNode):
 	def __init__(self, generated_function_name):
 		super().__init__(lua_node=None)
 		self.generated_function_name = generated_function_name
-		self.name = "Function (G) " + generated_function_name[4:10]
+		self.name = "Function " + generated_function_name[5:10] + " (G)"
+		self.name_extra = generated_function_name[4:10]
   
 '''
 	Intermediate reprsentation for conditionals. This node will contain each elseif/else statement.
@@ -430,7 +435,7 @@ def _render_visual_graph(visual_graph, node):
         if type(node) is AsyncIRGraphNode:
             visual_graph.edge(f"{node.name} {node.id}", f"{child.name} {child.id}", style="dotted")
         elif type(node) is GeneratedBlockIRGraphNode:
-            visual_graph.edge(f"{node.name} {node.id}", f"{child.name} {child.id}", style="dashed") # Change this to the desired style
+            visual_graph.edge(f"{node.name} {node.id}", f"{child.name} {child.id}", style="dashed") 
         else:
             visual_graph.edge(f"{node.name} {node.id}", f"{child.name} {child.id}", style="solid")
         _render_visual_graph(visual_graph, child)
@@ -471,7 +476,7 @@ def _get_subgraph_leaf_nodes(node, leaves):
 
 	for child in node.children:
 		# Enter subgraphs
-		if isinstance(child, LinkIRGraphNode):
+		if isinstance(child, GeneratedLinkIRGraphNode):
 			_get_subgraph_leaf_nodes(child.linked_graph.root_node, leaves)
 		else:
 			_get_subgraph_leaf_nodes(child, leaves)
@@ -517,11 +522,17 @@ class Translator:
 	'''
 	'''
 	Translating is done as follows:
-	1. Build IR graph:
+	1. Build/Expand IR graph:
 		- Build the Intermediate Representation (IR) graph tree
-		-- 1a. Travsering from the root, find all regular, conditional and loop nodes and add them to the graph linearly 
+		-- 1a. (Build) Travsering from the root, find all regular, conditional and loop nodes and add them to the graph linearly 
 		(without going into the branches or loops)
-		-- 1b. For each branch set it as root and goto 1a.
+		-- 1b. (Expand) For each node with a block, enter the block
+  		-- 1c. Mark whether the block contains an async call/assignment
+    	-- 1d. goto 1a
+	x. Check for recusion
+		- Make sure no functions recurse. If they do, then throw an error
+    x. Mark async blocks
+		- Find blocks that contain async statements and mark them for later
 	x. Modify Assignments: 
 		- Change local assignments to global assignments
 		- Track all variables in variable reference table
@@ -554,35 +565,38 @@ class Translator:
 		if self.render_visual_graph: 
 			render_visual_graph(output_graph_name="Expanded_IR_graph", root_nodes=[self.IR_graph.root_node])
 
+		# logging.info(f"Checking for recursion")
+		# try:
+		# 	self.check_for_recursion(self.IR_graph.root_node)
+		# except Exception():
+		# 	logging.error("Recursion detected")
+
+		
 		# logging.info("Modifying assignments to global assignments")
 		# # self.modify_assignments(self.IR_graph.root_node)
 		# if self.render_visual_graph:
 		# 	render_visual_graph(output_graph_name="Modified_assignments_IR_graph", root_nodes=[self.IR_graph.root_node])
-
 
 		# logging.info("Updating assignment references to global references")
 		# # self.update_assignment_references(self.IR_graph.root_node)
 		# if self.render_visual_graph:
 		# 	render_visual_graph(output_graph_name="Modified_assignments_IR_graph", root_nodes=[self.IR_graph.root_node])
 		
-
-  
-
-		# logging.info(f"Linearizing branches into exeuction graphs")
-		# self.linearize_branches()
-		# if self.render_visual_graph: 
-		# 	root_nodes = [graph.root_node for graph in self.exeuction_IR_graphs]
-		# 	root_nodes.append(self.IR_graph.root_node)
-		# 	render_visual_graph(output_graph_name="linearized_branches_IR_graphs", root_nodes=root_nodes)
+		logging.info(f"Linearizing branches into exeuction graphs")
+		self.linearize_branches()
+		if self.render_visual_graph: 
+			root_nodes = [graph.root_node for graph in self.exeuction_IR_graphs]
+			root_nodes.append(self.IR_graph.root_node)
+			render_visual_graph(output_graph_name="linearized_branches_IR_graphs", root_nodes=root_nodes)
 		
-		# logging.info(f"Separating async statements into exeuction graphs")
-		# # self.separate_async_statements()
-		# if self.render_visual_graph: 
-		# 	root_nodes = [graph.root_node for graph in self.exeuction_IR_graphs]
-		# 	root_nodes.append(self.IR_graph.root_node)
-		# 	render_visual_graph(output_graph_name="seperated_async_IR_graphs", root_nodes=root_nodes)
-		# logging.info(f"Constructing new AST")
-		# self.construct_ast()
+		logging.info(f"Separating async statements into exeuction graphs")
+		self.separate_async_statements()
+		if self.render_visual_graph: 
+			root_nodes = [graph.root_node for graph in self.exeuction_IR_graphs]
+			root_nodes.append(self.IR_graph.root_node)
+			render_visual_graph(output_graph_name="seperated_async_IR_graphs", root_nodes=root_nodes)
+		logging.info(f"Constructing new AST")
+		self.construct_ast()
 
 
 	def build_IR_graph(self, node):
@@ -648,6 +662,7 @@ class Translator:
 		for child in node.children:
 			self.expand_nodes(child)
 
+	
 
 	# def modify_assignments(self, node):
 	# 	# If the node is an assignment node
@@ -681,134 +696,132 @@ class Translator:
 	# 	for child in node.children:
 	# 		self.update_references(child)
 
-	# def linearize_branches(self):
-	# 	traversal_order = self.IR_graph.postorder(self.IR_graph.root_node)
+	def linearize_branches(self):
+		traversal_order = self.IR_graph.postorder(self.IR_graph.root_node)
   
-	# 	for node in traversal_order:
-   	# 		# Check if node have branch as children
-	# 		branch_present = False
-	# 		branch_node = None
-	# 		for child in node.children:
-	# 			if isinstance(child, BranchIRGraphNode):
-	# 				branch_present = True
-	# 				branch_node = child
+		for node in traversal_order:
+   			# Check if node have branch as children
+			branch_present = False
+			branch_node = None
+			for child in node.children:
+				if isinstance(child, GeneratedBranchIRGraphNode):
+					branch_present = True
+					branch_node = child
     
 
-	# 		# TODO: This assumes there is a maximum of two children on the parent node of the branch
-			
-	# 		# The post exeuction tree are nodes that execute after the nodes in the branch
-	# 		post_exeuction_tree = None
+			# The post exeuction tree are nodes that execute after the nodes in the branch
+			post_exeuction_tree = None
 
-	# 		if branch_present:
-	# 			# Find the post exeuction tree (if present)
-	# 			logging.debug(f"Found Branch {branch_node.id}")
-	# 			if len(node.children) > 2:
-	# 				logging.error(f"More than 2 children in node {node.name} {node.id}")
-	# 			for child in node.children:
-	# 				if not isinstance(child, BranchIRGraphNode):
-	# 					post_exeuction_tree = child
-	# 					break
+			if branch_present:
+				block_node = None
+				# Find the post exeuction tree (if present)
+				logging.debug(f"Found Branch {branch_node.id}")
+				for child in branch_node.children:
+					if not isinstance(child, GeneratedBlockIRGraphNode):
+						post_exeuction_tree = child
+					elif isinstance(child, GeneratedBlockIRGraphNode):
+						block_node = child
 				
-	# 			# Continue if there is no post exeuction tree (not present or branch has already been linearized)
-	# 			if post_exeuction_tree is None:
-	# 				continue
+				# Continue if there is no post exeuction tree (not present or branch has already been linearized)
+				if post_exeuction_tree is None:
+					continue
  
-	# 			logging.debug(f"Found post execution tree {post_exeuction_tree.name} {post_exeuction_tree.id}")
+				logging.debug(f"Found post execution tree {post_exeuction_tree.name} {post_exeuction_tree.id}")
 				
   
-	# 			'''
-	# 			Modify Branches:
-	# 			- Find Nonterminal Conditional Branches (NCBs), that is branches that do not contain an else statement.
-	# 				-- When linearizing, code that is executed after the if statement is appended to each conditional in the branch. This creates a problem in the following case:
-	# 				* The code is linearized
-	# 				* There is code after the branch (post exeuction tree)
-	# 				* The branch does not contain an else statement
-	# 				* All conditionals of the branch evaluate to false
-	# 				The linearized post exeuction tree will never be executed. We can fix this by copying the tree to a new artificially created
-	# 				'else' conditional node under the NCB. 
-	# 			'''
+				# '''
+				# Modify Branches:
+				# - Find Nonterminal Conditional Branches (NCBs), that is branches that do not contain an else statement.
+				# 	-- When linearizing, code that is executed after the if statement is appended to each conditional in the branch. This creates a problem in the following case:
+				# 	* The code is linearized
+				# 	* There is code after the branch (post exeuction tree)
+				# 	* The branch does not contain an else statement
+				# 	* All conditionals of the branch evaluate to false
+				# 	The linearized post exeuction tree will never be executed. We can fix this by copying the tree to a new artificially created
+				# 	'else' conditional node under the NCB. 
+				# '''
 
-	# 			if not branch_node.else_statement_present:
-	# 				logging.debug(f"Branch {branch_node.id} does not have an else statement, creating one")
-	# 				# Construct a placeholder node
-	# 				placeholder_else_node = PlaceholderConditionalElseIRGraphNode()
-	# 				self.IR_graph.pointer = branch_node
-	# 				self.IR_graph.add_node(placeholder_else_node)
+				# if not branch_node.else_statement_present:
+				# 	logging.debug(f"Branch {branch_node.id} does not have an else statement, creating one")
+				# 	# Construct a placeholder node
+				# 	placeholder_else_node = GeneratedConditionalElseIRGraphNode()
+				# 	self.IR_graph.pointer = branch_node
+				# 	self.IR_graph.add_node(placeholder_else_node)
 				
-	# 			# Find all leaf nodes, including those inside linked subgraphs
-	# 			leaf_nodes = get_subgraph_leaf_nodes(branch_node)
+				# Find all leaf nodes, including those inside linked subgraphs
+				leaf_nodes = get_subgraph_leaf_nodes(block_node)
 
-	# 			# TODO: Why was this here?
-	# 			# Remove post_execution_tree from leaf nodes
-	# 			# leaf_nodes = [node for node in leaf_nodes if node is not post_exeuction_tree]
+				# TODO: Why was this here?
+				# Remove post_execution_tree from leaf nodes
+				# leaf_nodes = [node for node in leaf_nodes if node is not post_exeuction_tree]
 
-	# 			# Create a new IR graph
-	# 			exeuction_IR_graph = IRGraph()
+				# Create a new IR graph
+				exeuction_IR_graph = IRGraph()
 
-	# 			# Append a new function as the root node
-	# 			placeholder_function = PlaceholderFunctionIRGraphNode(generated_function_name=exeuction_IR_graph.generated_name)
-	# 			exeuction_IR_graph.add_node(placeholder_function)
-	# 			logging.debug(f"Constructed new IR graph with root node {exeuction_IR_graph.root_node.name} {exeuction_IR_graph.root_node.id}")
+				# Append a new function as the root node
+				placeholder_function = GeneratedFunctionIRGraphNode(generated_function_name=exeuction_IR_graph.generated_name)
+				exeuction_IR_graph.add_node(placeholder_function)
+				logging.debug(f"Constructed new IR graph with root node {exeuction_IR_graph.root_node.name} {exeuction_IR_graph.root_node.id}")
 
-	# 			# Copy the post execution tree to the new IR graph
-	# 			logging.debug(f"Copying tree from source node {post_exeuction_tree.name} {post_exeuction_tree.id} to graph {exeuction_IR_graph.generated_name[4:10]} at parent node {exeuction_IR_graph.pointer.name} {exeuction_IR_graph.pointer.id}")
-	# 			copy_tree(src_node=post_exeuction_tree, dst_graph=exeuction_IR_graph, dst_node=exeuction_IR_graph.pointer)
-	# 			self.exeuction_IR_graphs.append(exeuction_IR_graph)	
+				# Copy the post execution tree to the new IR graph
+				logging.debug(f"Copying tree from source node {post_exeuction_tree.name} {post_exeuction_tree.id} to graph {exeuction_IR_graph.generated_name[4:10]} at parent node {exeuction_IR_graph.pointer.name} {exeuction_IR_graph.pointer.id}")
+				copy_tree(src_node=post_exeuction_tree, dst_graph=exeuction_IR_graph, dst_node=exeuction_IR_graph.pointer)
+				self.exeuction_IR_graphs.append(exeuction_IR_graph)	
 
-	# 			# Add a link to thew new IR graph to each of the leaf nodes
-	# 			for leaf_node in leaf_nodes:
-	# 				# Find which IR graph the leaf node belongs to
-	# 				IR_graph = leaf_node.IR_graph
-	# 				# Add link to execution graph
-	# 				IR_graph.pointer = leaf_node
-	# 				logging.debug(f"Adding link to leaf node {leaf_node.name} {leaf_node.id}")
-	# 				IR_graph.add_node(LinkIRGraphNode(exeuction_IR_graph))
+				# Add a link to thew new IR graph to each of the leaf nodes
+				for leaf_node in leaf_nodes:
+					# Find which IR graph the leaf node belongs to
+					IR_graph = leaf_node.IR_graph
+					# Add link to execution graph
+					IR_graph.pointer = leaf_node
+					logging.debug(f"Adding link to leaf node {leaf_node.name} {leaf_node.id}")
+					IR_graph.add_node(GeneratedLinkIRGraphNode(exeuction_IR_graph))
    
-	# 			# Remove the post execution tree from the main IR graph
-	# 			self.IR_graph.remove_node(post_exeuction_tree)
+				# Remove the post execution tree from the main IR graph
+				self.IR_graph.remove_node(post_exeuction_tree)
 
-	# 			# Reset the traversal order
-	# 			traversal_order = self.IR_graph.postorder(self.IR_graph.root_node)
+				# Reset the traversal order
+				traversal_order = self.IR_graph.postorder(self.IR_graph.root_node)
 
-	# def separate_async_statements(self):
-	# 	traversal_order = self.IR_graph.postorder(self.IR_graph.root_node)
+	def separate_async_statements(self):
+		traversal_order = self.IR_graph.postorder(self.IR_graph.root_node)
   
-	# 	for node in traversal_order:
-	# 		if isinstance(node, AsyncIRGraphNode):
+		for node in traversal_order:
+			if isinstance(node, AsyncIRGraphNode):
 			
-	# 			# Continue if async node has no children
-	# 			if not node.children: continue
+				# Continue if async node has no children
+				if not node.children: continue
     
-	# 			# Node should have only one child
-	# 			if len(node.children) > 1:
-	# 				logging.error("Async node has more than 1 child")
+				# Node should have only one child
+				if len(node.children) > 1:
+					logging.error("Async node has more than 1 child")
 
-	# 			# Get child of async node
-	# 			async_node_child = node.children[0]
+				# Get child of async node
+				async_node_child = node.children[0]
 
-	# 			# Create a new IR graph
-	# 			exeuction_IR_graph = IRGraph()
+				# Create a new IR graph
+				exeuction_IR_graph = IRGraph()
 
-	# 			# Append a placeholder function to the new graph as the root node
-	# 			placeholder_function = PlaceholderFunctionIRGraphNode(generated_function_name=exeuction_IR_graph.generated_name)	
-	# 			exeuction_IR_graph.add_node(placeholder_function)
+				# Append a placeholder function to the new graph as the root node
+				placeholder_function = GeneratedFunctionIRGraphNode(generated_function_name=exeuction_IR_graph.generated_name)	
+				exeuction_IR_graph.add_node(placeholder_function)
     
-	# 			# Copy the child tree of the async node to the new graph			
-	# 			copy_tree(src_node=async_node_child, dst_graph=exeuction_IR_graph, dst_node=exeuction_IR_graph.pointer)
-	# 			logging.debug(f"Constructed new IR graph with root node {exeuction_IR_graph.root_node.name} {exeuction_IR_graph.root_node.id}")
-	# 			self.exeuction_IR_graphs.append(exeuction_IR_graph)
+				# Copy the child tree of the async node to the new graph			
+				copy_tree(src_node=async_node_child, dst_graph=exeuction_IR_graph, dst_node=exeuction_IR_graph.pointer)
+				logging.debug(f"Constructed new IR graph with root node {exeuction_IR_graph.root_node.name} {exeuction_IR_graph.root_node.id}")
+				self.exeuction_IR_graphs.append(exeuction_IR_graph)
     
-	# 			# Remove async node children from main graph
-	# 			self.IR_graph.remove_node(async_node_child)
+				# Remove async node children from main graph
+				self.IR_graph.remove_node(async_node_child)
     
-	# 			# Add a link from the main graph to the new IR graph
-	# 			previous_pointer = self.IR_graph.pointer
-	# 			self.IR_graph.pointer = node
-	# 			self.IR_graph.add_node(LinkIRGraphNode(exeuction_IR_graph))
-	# 			self.IR_graph.pointer = previous_pointer
+				# Add a link from the main graph to the new IR graph
+				previous_pointer = self.IR_graph.pointer
+				self.IR_graph.pointer = node
+				self.IR_graph.add_node(GeneratedLinkIRGraphNode(exeuction_IR_graph))
+				self.IR_graph.pointer = previous_pointer
     
-	# 			# Reset traversal order
-	# 			traversal_order = self.IR_graph.postorder(self.IR_graph.root_node)
+				# Reset traversal order
+				traversal_order = self.IR_graph.postorder(self.IR_graph.root_node)
 
 	def construct_ast(self):
 		pass
@@ -979,7 +992,7 @@ class Translator:
 
 
 # Convert the source code to an AST
-source_lua_root_node = ast.parse(cases.source_code_8)
+source_lua_root_node = ast.parse(cases.source_code_5)
 
 #print(ast.to_pretty_str(tree))
 # Create FSM graph

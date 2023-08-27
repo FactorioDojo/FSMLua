@@ -236,6 +236,7 @@ function mine_resource(ore_type, quantity)
         await(mine(entity))
     end
 
+    mine_resource(1, 2)
     -- If the mining process was successful, return true
     return true
 end
