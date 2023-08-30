@@ -25,20 +25,19 @@ class RandomUtil():
             self.function_names.append(func_name)
         
         return func_name
+
+    def generate_link_name(self):
+        func_name = ''
+        while func_name not in self.function_names:
+            uuid_str =  str(uuid.UUID(int=self.rnd.getrandbits(128), version=4))
+            func_name = 'link_' + uuid_str
+            self.function_names.append(func_name)
+        
+        return func_name
     
     def generate_id(self):
         id_length = 6
         characters = string.ascii_lowercase + string.ascii_uppercase + string.digits
         return ''.join(self.rnd.choices(characters, k=id_length))
     
-   # For other stuff 
-    def generate_x(self):
-        pass
-        # func_name = ''
-        # while func_name not in self.function_names:
-        #     uuid_str =  str(uuid.UUID(int=self.rnd.getrandbits(128), version=4))
-        #     func_name = 'func_' + uuid_str
-        #     self.function_names.append(func_name)
-        
-        # return func_name
     

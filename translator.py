@@ -2,11 +2,8 @@ import os
 
 import tests.cases as cases
 
-import luaparser
 import luaparser.ast as ast
 import luaparser.astnodes as astnodes
-from luaparser.astnodes import *
-from luaparser.astnodes import Node
 
 from utils.random_util import RandomUtil
 
@@ -273,10 +270,11 @@ class GeneratedBlockIRGraphNode(IRGraphNode):
 	Links IR graphs together, dst_node will be the root node of another IR graph
 '''
 class GeneratedLinkIRGraphNode(GeneratedIRGraphNode):
-	def __init__(self, linked_graph):
+	def __init__(self, linked_graph, async_link=False):
 		super().__init__(lua_node=None)
-		self.name = "Link " + linked_graph.generated_name[5:10] + " (G)" 
-		self.name_extra = linked_graph.generated_name[4:10]
+		self.async_link = async_link
+		self.generated_link_name = random_util.generate_function_name()
+		self.name = "Link " + ("(A) " if self.async_link else "") + self.generated_link_name[5:10] + " → " + linked_graph.generated_name[5:10] + " (G)" 
 		self.linked_graph = linked_graph 
 		if self.linked_graph is None:
 			print("here")
@@ -289,7 +287,6 @@ class GeneratedFunctionIRGraphNode(GeneratedIRGraphNode):
 		super().__init__(lua_node=None)
 		self.generated_function_name = generated_function_name
 		self.name = "Function " + generated_function_name[5:10] + " (G)"
-		self.name_extra = generated_function_name[4:10]
   
 '''
 	Intermediate reprsentation for conditionals. This node will contain each elseif/else statement.
@@ -355,8 +352,22 @@ class IRGraph:
    
 		del old_node
   
-	def insert_parent_node(self, node, new_parent):
-		pass
+	def insert_between_nodes(self, parent_node, child_node, new_node):
+		# Remove the child_node from parent_node's children list
+		parent_node.remove_child(child_node)
+		
+		# Add new_node as a child of parent_node
+		parent_node.add_child(new_node)
+		
+		# Set new_node as the parent of child_node
+		new_node.add_child(child_node)
+		
+		# Set the IRGraph and id for the new node
+		global node_count
+		new_node.IR_graph = self
+		new_node.id = node_count
+		node_count += 1
+
 
 	def remove_node(self, removed_node):
 		removed_node.parent.remove_child(removed_node)
@@ -495,7 +506,9 @@ class Translator:
 		# Graphs
 		self.IR_graph = IRGraph() 
 		self.exeuction_IR_graphs = []
-		
+	
+		# Links
+		self.links = []
 
 		# Main function tracking	
 		self.main_function_name = None
@@ -539,7 +552,7 @@ class Translator:
 	x. Modify branches:
 		- Unpack assignments in conditionals
 		- If there is no else statement present, create one and put the post execution tree under the new else node
-	4. Construct Execution Graphs: 
+	x. Construct Execution Graphs: 
 		- Linearize:
 		-- Find node (x) with a branch child, add other children of (x) to a new IR graph, then append it to the end 
 		of each execution path of the branch child as a link node.
@@ -547,8 +560,12 @@ class Translator:
 		-- Find async node (x), add children of (x) to new IR graph, replace child of (x) with link to new IR graph
 	x. Extract functions:
 		- Extract and link functions together
-	x. Construct AST:
+	x. Insert event pointers:
+		- For each async node and its following link, insert a node that will set the event pointer before the async node
+	x. Construct AST headers:
 		- Secrete a new lua AST
+	x. Construct full AST
+		- Secrete the full lua AST
 	'''
 	def translate(self):
 		# Stage 1
@@ -595,6 +612,7 @@ class Translator:
 			root_nodes = [graph.root_node for graph in self.exeuction_IR_graphs]
 			root_nodes.append(self.IR_graph.root_node)
 			render_visual_graph(output_graph_name="seperated_async_IR_graphs", root_nodes=root_nodes)
+   
 		logging.info(f"Constructing new AST")
 		self.construct_ast()
 
@@ -618,7 +636,7 @@ class Translator:
 			# Find all conditional branches
 			conditional_nodes = [ConditionalIRGraphNode(lua_node=if_node)]
 			lookahead_node = if_node.orelse
-			while(isinstance(lookahead_node, luaparser.astnodes.ElseIf)):
+			while(isinstance(lookahead_node, astnodes.ElseIf)):
 				logging.debug(f"Found ElseIf")
 				conditional_nodes.append(ConditionalIRGraphNode(lua_node=lookahead_node))
 				lookahead_node = lookahead_node.orelse
@@ -775,7 +793,11 @@ class Translator:
 					# Add link to execution graph
 					IR_graph.pointer = leaf_node
 					logging.debug(f"Adding link to leaf node {leaf_node.name} {leaf_node.id}")
-					IR_graph.add_node(GeneratedLinkIRGraphNode(exeuction_IR_graph))
+					link_node = GeneratedLinkIRGraphNode(exeuction_IR_graph)
+					IR_graph.add_node(link_node)
+     
+					# Track link node
+					self.links.append((link_node, exeuction_IR_graph))
    
 				# Remove the post execution tree from the main IR graph
 				self.IR_graph.remove_node(post_exeuction_tree)
@@ -817,14 +839,37 @@ class Translator:
 				# Add a link from the main graph to the new IR graph
 				previous_pointer = self.IR_graph.pointer
 				self.IR_graph.pointer = node
-				self.IR_graph.add_node(GeneratedLinkIRGraphNode(exeuction_IR_graph))
+				link_node = GeneratedLinkIRGraphNode(exeuction_IR_graph, async_link=True)
+				self.IR_graph.add_node(link_node)
 				self.IR_graph.pointer = previous_pointer
+    
+				# Track link node
+				self.links.append((link_node, exeuction_IR_graph))
     
 				# Reset traversal order
 				traversal_order = self.IR_graph.postorder(self.IR_graph.root_node)
 
-	def construct_ast(self):
+	def insert_event_pointers(self):
 		pass
+
+	def construct_ast(self):
+		script_body = []	
+		script_body_node = astnodes.Block(script_body)
+		script_chunk_node = astnodes.Chunk(script_body_node)
+  
+		self.construct_event_ptrs(script_body)
+
+	'''
+		Constructs the event ptr table. i.e
+		global.event_ptrs['A_event'] = 'B_event'
+
+		async Call (A) -> Link (A). The link needs to insert a node above call setting the event ptr.
+		Any links that are not async should just be function calls
+  
+ 	'''
+	def construct_event_ptrs(self, script_body):
+		print(self.links)
+	
 
 	'''
 	################################################
@@ -843,6 +888,9 @@ class Translator:
 		pass
 	
 	def construct_function_lua_node():
+		pass
+
+	def construct_event_pointer_assignment():
 		pass
 
 	'''
@@ -866,7 +914,7 @@ class Translator:
 		if isinstance(node, list):
 			for item in node:
 				self.visit(item)
-		elif isinstance(node, Node):
+		elif isinstance(node, astnodes.Node):
 			logging.debug(f"Generic visit {node._name}")
 			# visit all object public attributes:
 			children = [
