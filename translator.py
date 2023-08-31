@@ -446,7 +446,9 @@ class Translator:
 		script_body_node = astnodes.Block(script_body)
 		script_chunk_node = astnodes.Chunk(script_body_node)
   
-		self.construct_event_ptrs(script_body)
+		event_ptrs = self.construct_event_ptrs(script_body)
+		for ptr in event_ptrs:
+			print(ast.to_lua_source(ptr))
 
 	'''
 		Constructs the event ptr table. i.e
@@ -463,20 +465,22 @@ class Translator:
 		event_ptrs = []
 		for link, graph in self.links:
 			if link.async_link:
-				print(link)
 				event_ptr_assignment_node = \
 					astnodes.Assign(
 					targets=[
 						astnodes.Index(
 							idx=astnodes.String(
-								s='test'
+								s=link.generated_link_name
 							),
 							value=astnodes.Name(GLOBAL_EVENT_PTR_TABLE_NAME),
 							notation=astnodes.IndexNotation.SQUARE,
 						)
 					],
-					values=[astnodes.Name('test')],
+					values=[astnodes.Name(graph.root_node.generated_function_name)],
 				)
+
+				event_ptrs.append(event_ptr_assignment_node)
+		return event_ptrs
 
 	'''
 	################################################
