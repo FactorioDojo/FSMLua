@@ -11,7 +11,7 @@ from graphviz import Digraph
 
 from typing import List
 import coloredlogs, logging
-
+from pprint import pprint
 import copy
 
 # windows only
@@ -62,16 +62,34 @@ class IRGraphNode:
 		self.children = []
 		self.contains_async = False
 
+
 	def __copy__(self):
 		cls = self.__class__
-		result = cls.__new__(cls)
-		result.IR_graph = None
-		result.id = -1
-		result.lua_node = self.lua_node
-		result.name = self.name
-		result.parent = None
-		result.children = []
-		return result
+		new_instance = cls.__new__(cls)
+		for attr, value in self.__dict__.items():
+			if isinstance(value, list):
+				setattr(new_instance, attr, copy.deepcopy(value))
+			else:
+				setattr(new_instance, attr, value)
+
+		new_instance.IR_graph = None
+		new_instance.id = -1
+		new_instance.lua_node = self.lua_node
+		new_instance.name = self.name
+		new_instance.parent = None
+		new_instance.children = []
+		return new_instance
+
+	# def __copy__(self):
+	# 	cls = self.__class__
+	# 	result = cls.__new__(cls)
+	# 	result.IR_graph = None
+	# 	result.id = -1
+	# 	result.lua_node = self.lua_node
+	# 	result.name = self.name
+	# 	result.parent = None
+	# 	result.children = []
+	# 	return result
 
 	def add_child(self, child):
 		child.parent = self
@@ -270,7 +288,7 @@ class GeneratedBlockIRGraphNode(IRGraphNode):
 	Links IR graphs together, dst_node will be the root node of another IR graph
 '''
 class GeneratedLinkIRGraphNode(GeneratedIRGraphNode):
-	def __init__(self, linked_graph, async_link=False):
+	def __init__(self, linked_graph, async_link):
 		super().__init__(lua_node=None)
 		self.async_link = async_link
 		self.generated_link_name = random_util.generate_function_name()
@@ -303,6 +321,15 @@ class GeneratedConditionalElseIRGraphNode(GeneratedIRGraphNode):
 	def __init__(self):
 		super().__init__(lua_node=None)
 		self.name = "Else (G)"
+
+'''
+	Placeholder for setting the event pointer
+'''
+class GeneratedSetEventPointerNode(GeneratedIRGraphNode):
+	def __init__(self, pointer):
+		super().__init__(lua_node=None)
+		self.name = "SetEventPointer " + pointer[5:10]
+		self.pointer = pointer
   
 '''
 ################################################
@@ -312,9 +339,9 @@ class GeneratedConditionalElseIRGraphNode(GeneratedIRGraphNode):
 
 class IRGraph:
 	def __init__(self, root_node=None):
-     
+	 
 		self.generated_name = random_util.generate_function_name()
-     
+	 
 		self.root_node = root_node
   
 		self.pointer = None
@@ -440,16 +467,16 @@ def render_visual_graph(output_graph_name, root_nodes):
 	visual_graph.render(output_path, view=False)
 
 def _render_visual_graph(visual_graph, node):
-    if node is None: return
+	if node is None: return
 
-    for child in node.children:
-        if type(node) is AsyncIRGraphNode:
-            visual_graph.edge(f"{node.name} {node.id}", f"{child.name} {child.id}", style="dotted")
-        elif type(node) is GeneratedBlockIRGraphNode:
-            visual_graph.edge(f"{node.name} {node.id}", f"{child.name} {child.id}", style="dashed") 
-        else:
-            visual_graph.edge(f"{node.name} {node.id}", f"{child.name} {child.id}", style="solid")
-        _render_visual_graph(visual_graph, child)
+	for child in node.children:
+		if type(node) is AsyncIRGraphNode:
+			visual_graph.edge(f"{node.name} {node.id}", f"{child.name} {child.id}", style="dotted")
+		elif type(node) is GeneratedBlockIRGraphNode:
+			visual_graph.edge(f"{node.name} {node.id}", f"{child.name} {child.id}", style="dashed") 
+		else:
+			visual_graph.edge(f"{node.name} {node.id}", f"{child.name} {child.id}", style="solid")
+		_render_visual_graph(visual_graph, child)
   
 '''
 	Creates a deep copy of the entire tree under src_node and places it under the dst_node of the dst_graph
@@ -471,7 +498,7 @@ def _copy_tree(dst_graph, node):
  
  
 def remove_duplicates(l):
-    return list(set(l))
+	return list(set(l))
 '''
 	Returns the leaf nodes of a graph, including those inside subgraph links. Removes duplicates.
 '''
@@ -505,7 +532,7 @@ class Translator:
   
 		# Graphs
 		self.IR_graph = IRGraph() 
-		self.exeuction_IR_graphs = []
+		self.exeuction_IR_graphs = [self.IR_graph]
 	
 		# Links
 		self.links = []
@@ -541,10 +568,10 @@ class Translator:
 		(without going into the branches or loops)
 		-- 1b. (Expand) For each node with a block, enter the block
   		-- 1c. Mark whether the block contains an async call/assignment
-    	-- 1d. goto 1a
+		-- 1d. goto 1a
 	x. Check for recusion
 		- Make sure no functions recurse. If they do, then throw an error
-    x. Mark async blocks
+	x. Mark async blocks
 		- Find blocks that contain async statements and mark them for later
 	x. Modify Assignments: 
 		- Change local assignments to global assignments
@@ -603,16 +630,25 @@ class Translator:
 		self.linearize_branches()
 		if self.render_visual_graph: 
 			root_nodes = [graph.root_node for graph in self.exeuction_IR_graphs]
-			root_nodes.append(self.IR_graph.root_node)
+			# root_nodes.append(self.IR_graph.root_node)
 			render_visual_graph(output_graph_name="linearized_branches_IR_graphs", root_nodes=root_nodes)
 		
 		logging.info(f"Separating async statements into exeuction graphs")
 		self.separate_async_statements()
 		if self.render_visual_graph: 
 			root_nodes = [graph.root_node for graph in self.exeuction_IR_graphs]
-			root_nodes.append(self.IR_graph.root_node)
+			# root_nodes.append(self.IR_graph.root_node)
 			render_visual_graph(output_graph_name="seperated_async_IR_graphs", root_nodes=root_nodes)
-   
+  
+
+		logging.info(f"Inserting event pointers")
+		self.insert_event_pointers()
+		if self.render_visual_graph: 
+			root_nodes = [graph.root_node for graph in self.exeuction_IR_graphs]
+			# root_nodes.append(self.IR_graph.root_node)
+			render_visual_graph(output_graph_name="event_ptrs_IR_graphs", root_nodes=root_nodes)
+  
+	
 		logging.info(f"Constructing new AST")
 		self.construct_ast()
 
@@ -688,7 +724,7 @@ class Translator:
 	# 		# Construct the new lua node
 	# 		global_assign_lua_node = self.construct_global_assign_lua_node()
    			
-    #   		# Create a new GlobalAssignIRGraphNode
+	#   		# Create a new GlobalAssignIRGraphNode
 	# 		newAssignNode = GlobalAssignIRGraphNode()
 	# 		node.__class__ = GlobalAssignIRGraphNode
 	# 		# Add the variables to the modified_vars set
@@ -725,7 +761,7 @@ class Translator:
 				if isinstance(child, GeneratedBranchIRGraphNode):
 					branch_present = True
 					branch_node = child
-    
+	
 
 			# The post exeuction tree are nodes that execute after the nodes in the branch
 			post_exeuction_tree = None
@@ -793,9 +829,9 @@ class Translator:
 					# Add link to execution graph
 					IR_graph.pointer = leaf_node
 					logging.debug(f"Adding link to leaf node {leaf_node.name} {leaf_node.id}")
-					link_node = GeneratedLinkIRGraphNode(exeuction_IR_graph)
+					link_node = GeneratedLinkIRGraphNode(exeuction_IR_graph, async_link=False)
 					IR_graph.add_node(link_node)
-     
+	 
 					# Track link node
 					self.links.append((link_node, exeuction_IR_graph))
    
@@ -806,51 +842,71 @@ class Translator:
 				traversal_order = self.IR_graph.postorder(self.IR_graph.root_node)
 
 	def separate_async_statements(self):
-		traversal_order = self.IR_graph.postorder(self.IR_graph.root_node)
-  
-		for node in traversal_order:
-			if isinstance(node, AsyncIRGraphNode):
-			
-				# Continue if async node has no children
-				if not node.children: continue
-    
-				# Node should have only one child
-				if len(node.children) > 1:
-					logging.error("Async node has more than 1 child")
+		for IR_graph in self.exeuction_IR_graphs:
+			traversal_order = IR_graph.postorder(IR_graph.root_node)
+			for node in traversal_order:
+				if isinstance(node, AsyncIRGraphNode):
+				
+					# Continue if async node has no children
+					if not node.children: continue
+		
+					# Node should have only one child
+					if len(node.children) > 1:
+						logging.error("Async node has more than 1 child")
 
-				# Get child of async node
-				async_node_child = node.children[0]
+					# Get child of async node
+					async_node_child = node.children[0]
 
-				# Create a new IR graph
-				exeuction_IR_graph = IRGraph()
+					# Create a new IR graph
+					exeuction_IR_graph = IRGraph()
 
-				# Append a placeholder function to the new graph as the root node
-				placeholder_function = GeneratedFunctionIRGraphNode(generated_function_name=exeuction_IR_graph.generated_name)	
-				exeuction_IR_graph.add_node(placeholder_function)
-    
-				# Copy the child tree of the async node to the new graph			
-				copy_tree(src_node=async_node_child, dst_graph=exeuction_IR_graph, dst_node=exeuction_IR_graph.pointer)
-				logging.debug(f"Constructed new IR graph with root node {exeuction_IR_graph.root_node.name} {exeuction_IR_graph.root_node.id}")
-				self.exeuction_IR_graphs.append(exeuction_IR_graph)
-    
-				# Remove async node children from main graph
-				self.IR_graph.remove_node(async_node_child)
-    
-				# Add a link from the main graph to the new IR graph
-				previous_pointer = self.IR_graph.pointer
-				self.IR_graph.pointer = node
-				link_node = GeneratedLinkIRGraphNode(exeuction_IR_graph, async_link=True)
-				self.IR_graph.add_node(link_node)
-				self.IR_graph.pointer = previous_pointer
-    
-				# Track link node
-				self.links.append((link_node, exeuction_IR_graph))
-    
-				# Reset traversal order
-				traversal_order = self.IR_graph.postorder(self.IR_graph.root_node)
+					# Append a placeholder function to the new graph as the root node
+					placeholder_function = GeneratedFunctionIRGraphNode(generated_function_name=exeuction_IR_graph.generated_name)	
+					exeuction_IR_graph.add_node(placeholder_function)
+		
+					# Copy the child tree of the async node to the new graph			
+					copy_tree(src_node=async_node_child, dst_graph=exeuction_IR_graph, dst_node=exeuction_IR_graph.pointer)
+					logging.debug(f"Constructed new IR graph with root node {exeuction_IR_graph.root_node.name} {exeuction_IR_graph.root_node.id}")
+					self.exeuction_IR_graphs.append(exeuction_IR_graph)
+		
+					# Remove async node children from main graph
+					self.IR_graph.remove_node(async_node_child)
+		
+					# Add a link from the main graph to the new IR graph
+					previous_pointer = self.IR_graph.pointer
+					self.IR_graph.pointer = node
+					link_node = GeneratedLinkIRGraphNode(exeuction_IR_graph, async_link=True)
+					self.IR_graph.add_node(link_node)
+					self.IR_graph.pointer = previous_pointer
+		
+					# Track link node
+					self.links.append((link_node, exeuction_IR_graph))
+		
+					# Reset traversal order
+					traversal_order = self.IR_graph.postorder(self.IR_graph.root_node)
 
 	def insert_event_pointers(self):
-		pass
+		for IR_graph in self.exeuction_IR_graphs:
+			traversal_order = IR_graph.preorder(IR_graph.root_node)
+			for node in traversal_order:
+				if isinstance(node, GeneratedLinkIRGraphNode):
+					if node.async_link:
+						# Create a new GeneratedSetEventPointerNode with pointer equal to the generated link name
+						set_event_pointer_node = GeneratedSetEventPointerNode(node.generated_link_name)
+						
+						# Get the parent node of the GeneratedLinkIRGraphNode
+						parent_node = node.parent				
+	
+						# Get the grandparent node of the GeneratedLinkIRGraphNode
+						grandparent_node = parent_node.parent
+
+						if parent_node and grandparent_node:
+							# Insert the GeneratedSetEventPointerNode between the parent and the GeneratedLinkIRGraphNode
+							self.IR_graph.insert_between_nodes(grandparent_node, parent_node, set_event_pointer_node)
+				
+							# Reset traversal order
+							traversal_order = self.IR_graph.preorder(self.IR_graph.root_node)
+
 
 	def construct_ast(self):
 		script_body = []	
