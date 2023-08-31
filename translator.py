@@ -1,18 +1,18 @@
 import os
 
 import tests.cases as cases
-
 import luaparser.ast as ast
 import luaparser.astnodes as astnodes
 
 from utils.random_util import RandomUtil
+from utils.graph_util import *
 
-from graphviz import Digraph
+from IR_graph import IRGraph
+from IR_nodes import *
+
 
 from typing import List
 import coloredlogs, logging
-from pprint import pprint
-import copy
 
 # windows only
 if os.name == 'nt':
@@ -22,10 +22,7 @@ os.environ["COLOREDLOGS_LOG_FORMAT"] ='[%(hostname)s] %(funcName)s :: %(levelnam
 
 coloredlogs.install(level='DEBUG')
 
-random_util = RandomUtil(123)
 
-# For visual rendering
-node_count = 0
 
 '''
 	Converts lua code to an event-driven finite state machine (substitute for coroutines)
@@ -49,475 +46,11 @@ node_count = 0
 	- Update local and global assignments/references to global table
 '''
 
-
-class IRGraphNode:
-	def __init__(self, lua_node):
-		self.IR_graph = None
-		self.id = -1
-		self.lua_node = lua_node
-		if lua_node:
-			self.name = lua_node._name
-		self.name_extra = ''
-		self.parent = None
-		self.children = []
-		self.contains_async = False
-
-
-	def __copy__(self):
-		cls = self.__class__
-		new_instance = cls.__new__(cls)
-		for attr, value in self.__dict__.items():
-			if isinstance(value, list):
-				setattr(new_instance, attr, copy.deepcopy(value))
-			else:
-				setattr(new_instance, attr, value)
-
-		new_instance.IR_graph = None
-		new_instance.id = -1
-		new_instance.lua_node = self.lua_node
-		new_instance.name = self.name
-		new_instance.parent = None
-		new_instance.children = []
-		return new_instance
-
-	# def __copy__(self):
-	# 	cls = self.__class__
-	# 	result = cls.__new__(cls)
-	# 	result.IR_graph = None
-	# 	result.id = -1
-	# 	result.lua_node = self.lua_node
-	# 	result.name = self.name
-	# 	result.parent = None
-	# 	result.children = []
-	# 	return result
-
-	def add_child(self, child):
-		child.parent = self
-		self.children.append(child)
-  
-	def add_children(self, children):
-		for child in children:
-			child.parent = self
-		self.children.extend(children)
-   
-	def remove_child(self, removed_child):
-		self.children = [child for child in self.children if child is not removed_child]
-   
-	def remove_children(self, removed_children):
-		self.children = [child for child in self.children if child not in removed_children]
-
-
 '''
-################################################
-	REGULAR IR NODES
-################################################
+	Constants
 '''
+GLOBAL_EVENT_PTR_TABLE_NAME = 'global.event_ptrs'
 
-'''
-	Regular graph nodes are any sort of exeuction that does not introduce differing levels of heirarchy or asynchronous calls
-	and do not require any modification
-'''
-class RegularIRGraphNode(IRGraphNode):
-	def __init__(self, lua_node):
-		super().__init__(lua_node)
-
-class FunctionIRGraphNode(RegularIRGraphNode):
-	def __init__(self, lua_node):
-		super().__init__(lua_node)
-  
-class LocalFunctionIRGraphNode(RegularIRGraphNode):
-	def __init__(self, lua_node):
-		super().__init__(lua_node)
-
-'''
-	Local assignments 
-'''
-class LocalAssignIRGraphNode(RegularIRGraphNode):
-	def __init__(self, lua_node):
-		super().__init__(lua_node)
-
-'''
-	Global assignments
-'''
-class GlobalAssignIRGraphNode(RegularIRGraphNode):
-	def __init__(self, lua_node):
-		super().__init__(lua_node)
-  
-'''
-	Semicolons
-'''
-class SemicolonIRGraphNode(RegularIRGraphNode):
-	def __init__(self, lua_node):
-		super().__init__(lua_node)
- 
-'''
-	Do-end blocks are typically used to introduce stricter scoping, and they do introduce differing levels of heirarchy--
-	but given that all variables will be converted to global variables anyways it doesn't matter.
-'''
-class DoIRGraphNode(RegularIRGraphNode):
-	def __init__(self, lua_node):
-		super().__init__(lua_node)
-
-
-  
-'''
-################################################
-	ASYNC IR NODES
-################################################
-'''
-
-'''
-	Asynchronous graph nodes
-'''
-class AsyncIRGraphNode(IRGraphNode):
-	def __init__(self, lua_node):
-		super().__init__(lua_node)
-		self.name = lua_node._name + ' (A)'
-		self.contains_async = True
-
-'''
-	Asynchronous function calling
-'''
-class AsyncCallIRGraphNode(AsyncIRGraphNode):
-	def __init__(self, lua_node):
-		super().__init__(lua_node)
-
-'''
-	Asynchronous assignments
-'''
-class AsyncAssignIRGraphNode(AsyncIRGraphNode):
-	def __init__(self, lua_node):
-		super().__init__(lua_node)
-
-
-'''
-################################################
-	CONTROL STRUCTURES IR NODES
-################################################
-'''
-
-class ControlStructureIRGraphNode(IRGraphNode):
-	def __init__(self, lua_node):
-		super().__init__(lua_node)
-
-'''
-	Conditional graph nodes (children to generated branch nodes)
-'''
-class ConditionalIRGraphNode(ControlStructureIRGraphNode):
-	def __init__(self, lua_node, name=""):
-		super().__init__(lua_node)
-		if name != "": self.name = name
-
-class BreakIRGraphNode(ControlStructureIRGraphNode):
-	def __init__(self, lua_node):
-		super().__init__(lua_node)
-  
-class ReturnIRGraphNode(ControlStructureIRGraphNode):
-	def __init__(self, lua_node):
-		super().__init__(lua_node)
-
-class GotoIRGraphNode(ControlStructureIRGraphNode):
-	def __init__(self, lua_node):
-		super().__init__(lua_node)
-  
-class LabelIRGraphNode(ControlStructureIRGraphNode):
-	def __init__(self, lua_node):
-		super().__init__(lua_node)
-
-  
-'''
-################################################
-	LOOP IR NODES
-################################################
-'''
-class LoopIRGraphNode(IRGraphNode):
-	def __init__(self, lua_node):
-		super().__init__(lua_node)
-
-
-'''
-	Lua first tests the while condition; if the condition is false, then the loop ends; 
-	otherwise, Lua executes the body of the loop and repeats the process.
-'''
-class WhileIRGraphNode(LoopIRGraphNode):
-	def __init__(self, lua_node):
-		super().__init__(lua_node)
-
-'''
-	A repeat-until statement repeats its body until its condition is true. 
-	The test is done after the body, so the body is always executed at least once.
-'''
-class RepeatIRGraphNode(LoopIRGraphNode):
-	def __init__(self, lua_node):
-		super().__init__(lua_node)
-
-'''
-	The generic for loop allows you to traverse all values returned by an iterator function.
-'''  
-class ForinIRGraphNode(LoopIRGraphNode):
-	def __init__(self, lua_node):
-		super().__init__(lua_node)
-'''
-	The numeric for loop works as usual. 
-	All three expressions in the declaration of the for loop are evaluated once, before the loop starts. 
-'''
-class FornumIRGraphNode(LoopIRGraphNode):
-	def __init__(self, lua_node):
-		super().__init__(lua_node)
-
-'''
-################################################
-	COMPILATION GENERATED IR NODES
-################################################
-'''
-
-class GeneratedIRGraphNode(IRGraphNode):
-	def __init__(self, lua_node):
-		super().__init__(lua_node)
-
-
-'''
-	Helper node for statements with bodies
-'''
-class GeneratedBlockIRGraphNode(IRGraphNode):
-	def __init__(self, lua_node=None):
-		super().__init__(lua_node)
-		self.name = "Block (G)"
-
-'''
-	Links IR graphs together, dst_node will be the root node of another IR graph
-'''
-class GeneratedLinkIRGraphNode(GeneratedIRGraphNode):
-	def __init__(self, linked_graph, async_link):
-		super().__init__(lua_node=None)
-		self.async_link = async_link
-		self.generated_link_name = random_util.generate_function_name()
-		self.name = "Link " + ("(A) " if self.async_link else "") + self.generated_link_name[5:10] + " → " + linked_graph.generated_name[5:10] + " (G)" 
-		self.linked_graph = linked_graph 
-		if self.linked_graph is None:
-			print("here")
-			exit()
-'''
-	Placeholder for a new function node
-'''
-class GeneratedFunctionIRGraphNode(GeneratedIRGraphNode):
-	def __init__(self, generated_function_name):
-		super().__init__(lua_node=None)
-		self.generated_function_name = generated_function_name
-		self.name = "Function " + generated_function_name[5:10] + " (G)"
-  
-'''
-	Intermediate reprsentation for conditionals. This node will contain each elseif/else statement.
-'''
-class GeneratedBranchIRGraphNode(GeneratedIRGraphNode):
-	def __init__(self, lua_node):
-		super().__init__(lua_node)
-		self.name = 'Branch (G)'
-		self.else_statement_present = False
-'''
-	Placeholder for new else node
-'''
-class GeneratedConditionalElseIRGraphNode(GeneratedIRGraphNode):
-	def __init__(self):
-		super().__init__(lua_node=None)
-		self.name = "Else (G)"
-
-'''
-	Placeholder for setting the event pointer
-'''
-class GeneratedSetEventPointerNode(GeneratedIRGraphNode):
-	def __init__(self, pointer):
-		super().__init__(lua_node=None)
-		self.name = "SetEventPointer " + pointer[5:10]
-		self.pointer = pointer
-  
-'''
-################################################
-	IR GRAPH
-################################################
-'''
-
-class IRGraph:
-	def __init__(self, root_node=None):
-	 
-		self.generated_name = random_util.generate_function_name()
-	 
-		self.root_node = root_node
-  
-		self.pointer = None
-  
-	def add_node(self, graph_node):
-	 
-		global node_count
-		# Initialize root node
-		if self.root_node is None:
-			logging.debug(f"Initializing root node of graph with node {graph_node.name}")
-			graph_node.IR_graph = self
-			graph_node.id = node_count
-			node_count += 1
-			self.root_node = graph_node
-			self.pointer = self.root_node
-			return
-
-		graph_node.IR_graph = self
-		graph_node.id = node_count
-		node_count += 1
-  
-		logging.debug(f"Adding node {graph_node.name} {graph_node.id} to parent node {self.pointer.name} {graph_node.id}")
-		self.pointer.add_child(graph_node)
-
-		self.pointer = graph_node
-
-	def replace_node(self, old_node, new_node):
-		# Replace old_node's parent's reference to this old_node with new_node
-		old_node.parent.remove_child(old_node)
-		old_node.parent.add_child(new_node)
-  
-		# Replace old_node's children reference to old_node with new_node
-		for child in old_node.children:
-			child.parent = new_node
-   
-		del old_node
-  
-	def insert_between_nodes(self, parent_node, child_node, new_node):
-		# Remove the child_node from parent_node's children list
-		parent_node.remove_child(child_node)
-		
-		# Add new_node as a child of parent_node
-		parent_node.add_child(new_node)
-		
-		# Set new_node as the parent of child_node
-		new_node.add_child(child_node)
-		
-		# Set the IRGraph and id for the new node
-		global node_count
-		new_node.IR_graph = self
-		new_node.id = node_count
-		node_count += 1
-
-
-	def remove_node(self, removed_node):
-		removed_node.parent.remove_child(removed_node)
-
-	def get_descendants(self, node):
-		children = []
-		self._get_descendants(node, children)
-		return children
-  
-	def _get_descendants(self, node, children):
-		if not node.children: return
-  	
-		for child in node.children:
-			children.append(child)
-			self._get_descendants(child)
-   
-	def get_leaf_nodes(self, node):
-		leaves = []
-		self._get_leaf_nodes(node, leaves)
-		return leaves
-
-	def _get_leaf_nodes(self, node, leaves):
-		if not node.children: 
-			leaves.append(node)
-			return
-  	
-		for child in node.children:
-			self._get_leaf_nodes(child, leaves)
-	 
-	def preorder(self, node, visited=None):
-		if visited is None:
-			visited = []
-
-		if node not in visited:
-			visited.append(node)
-			yield node
-			for child in node.children:
-				yield from self.preorder(child, visited)
-
-	def postorder(self, node, visited=None):
-		if visited is None:
-			visited = []
-
-		if node not in visited:
-			visited.append(node)
-			for child in node.children:
-				yield from self.postorder(child, visited)
-			yield node
-
-
-'''
-	Creates a visual rendering of the IR graph using graphviz
-'''
-def render_visual_graph(output_graph_name, root_nodes):
-
-	visual_graph = Digraph()
-	
-
-	for root_node in root_nodes:
-		_render_visual_graph(visual_graph, root_node)
-
-	# Create the "Output" folder if it doesn't exist
-	output_folder = "out"
-	if not os.path.exists(output_folder):
-		os.makedirs(output_folder)
-
-	# Save the FSM graph as a file
-	output_path = os.path.join(output_folder, output_graph_name)
-	visual_graph.format = "png"
-	visual_graph.render(output_path, view=False)
-
-def _render_visual_graph(visual_graph, node):
-	if node is None: return
-
-	for child in node.children:
-		if type(node) is AsyncIRGraphNode:
-			visual_graph.edge(f"{node.name} {node.id}", f"{child.name} {child.id}", style="dotted")
-		elif type(node) is GeneratedBlockIRGraphNode:
-			visual_graph.edge(f"{node.name} {node.id}", f"{child.name} {child.id}", style="dashed") 
-		else:
-			visual_graph.edge(f"{node.name} {node.id}", f"{child.name} {child.id}", style="solid")
-		_render_visual_graph(visual_graph, child)
-  
-'''
-	Creates a deep copy of the entire tree under src_node and places it under the dst_node of the dst_graph
-'''  
-def copy_tree(src_node, dst_graph, dst_node):
-	dst_graph.pointer = dst_node
-	_copy_tree(dst_graph, src_node)
-
-def _copy_tree(dst_graph, node):
-	copied_node = copy.copy(node)
-	dst_graph.add_node(copied_node)
-
-	if len(node.children) > 1: 
-		for child in node.children:
-			dst_graph.pointer = copied_node
-			_copy_tree(dst_graph, child)
-	elif len(node.children) == 1:
-		_copy_tree(dst_graph, node.children[0])
- 
- 
-def remove_duplicates(l):
-	return list(set(l))
-'''
-	Returns the leaf nodes of a graph, including those inside subgraph links. Removes duplicates.
-'''
-def get_subgraph_leaf_nodes(node):
-	leaves = []
-	_get_subgraph_leaf_nodes(node, leaves)
-	return remove_duplicates(leaves)
-
-def _get_subgraph_leaf_nodes(node, leaves):
-	if not node.children: 
-		leaves.append(node)
-		return
-
-	for child in node.children:
-		# Enter subgraphs
-		if isinstance(child, GeneratedLinkIRGraphNode):
-			_get_subgraph_leaf_nodes(child.linked_graph.root_node, leaves)
-		else:
-			_get_subgraph_leaf_nodes(child, leaves)
 
 '''
 ################################################
@@ -922,10 +455,28 @@ class Translator:
 		async Call (A) -> Link (A). The link needs to insert a node above call setting the event ptr.
 		Any links that are not async should just be function calls
   
+  
+	global.event_ptrs['doThing'] = A_event
+
  	'''
 	def construct_event_ptrs(self, script_body):
-		print(self.links)
-	
+		event_ptrs = []
+		for link, graph in self.links:
+			if link.async_link:
+				print(link)
+				event_ptr_assignment_node = \
+					astnodes.Assign(
+					targets=[
+						astnodes.Index(
+							idx=astnodes.String(
+								s='test'
+							),
+							value=astnodes.Name(GLOBAL_EVENT_PTR_TABLE_NAME),
+							notation=astnodes.IndexNotation.SQUARE,
+						)
+					],
+					values=[astnodes.Name('test')],
+				)
 
 	'''
 	################################################
