@@ -32,8 +32,10 @@ coloredlogs.install(level='DEBUG')
 
 	Limitations:
 	- No recursion
+	- No nested functions (does not include anonymous functions)
  
 	TODO:
+	- Anonymous functions
 	- Error handling on invalid syntax
 	- Error handling on detected recursion
 	- Function closure (function inside function)
@@ -446,14 +448,38 @@ class Translator:
 
 	def construct_ast(self):
 		script_body = []	
-		script_body_node = astnodes.Block(script_body)
-		script_chunk_node = astnodes.Chunk(script_body_node)
-  
+		script_block_node = astnodes.Block(body=script_body)
+		script_chunk_node = astnodes.Chunk(body=script_block_node)
+
+		# Build headers
 		event_ptr_nodes = self.construct_event_ptr_assignment_nodes()
 		event_name_nodes = self.construct_event_name_assignment_nodes()
 		event_registration_nodes = self.construct_event_registration_nodes()
-		for ptr in event_registration_nodes:
-			print(ast.to_lua_source(ptr))
+		script_body.extend(event_ptr_nodes)
+		script_body.extend(event_name_nodes)
+		script_body.extend(event_registration_nodes)
+   
+		# Build functions from IR graph
+		# 1 function per graph
+		function_nodes = []
+		for exeuction_IR_graph in self.exeuction_IR_graphs:
+			function_node = None
+			function_body = []
+			for node in exeuction_IR_graph.preorder():
+				if isinstance(node, RegularIRGraphNode):
+					if isinstance(node, FunctionIRGraphNode):
+						function_node = \
+						astnodes.Function(
+							name=node.lua_node.name,
+							args=node.lua_node.args
+	   					)
+      
+      
+					function_body.append(node.lua_node)
+				if isinstance(node, GeneratedIRGraphNode):
+					print(type(node))
+				else:
+					print(type(node))
 
 
 	'''
