@@ -7,6 +7,7 @@ import random
 import string
 import uuid
 
+
 class RandomUtil():
     def __init__(self, seed):
         self.seed = seed

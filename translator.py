@@ -49,8 +49,11 @@ coloredlogs.install(level='DEBUG')
 '''
 	Constants
 '''
-GLOBAL_EVENT_PTR_TABLE_NAME = 'global.event_ptrs'
+EVENT_PTR_TABLE_NAME = 'global.event_ptrs'
+EVENT_NAME_TABLE_NAME = 'global.event_names'
 
+GENERATE_EVENT_NAME_FUNCTION_NAME = 'script.generate_event_name'
+REGISTER_EVENT_FUNCTION_NAME = 'script.on_event'
 
 '''
 ################################################
@@ -446,23 +449,31 @@ class Translator:
 		script_body_node = astnodes.Block(script_body)
 		script_chunk_node = astnodes.Chunk(script_body_node)
   
-		event_ptrs = self.construct_event_ptrs(script_body)
-		for ptr in event_ptrs:
+		event_ptr_nodes = self.construct_event_ptr_assignment_nodes()
+		event_name_nodes = self.construct_event_name_assignment_nodes()
+		event_registration_nodes = self.construct_event_registration_nodes()
+		for ptr in event_registration_nodes:
 			print(ast.to_lua_source(ptr))
 
+
 	'''
-		Constructs the event ptr table. i.e
+	################################################
+		LUA AST NODE BUILDERS	
+	################################################
+	'''
+
+	'''
+	################################################
+		EVENT BUS HEADERS
+	################################################
+	'''
+	'''
+		Constructs the event ptr assignments. i.e
 		global.event_ptrs['A_event'] = 'B_event'
-
-		async Call (A) -> Link (A). The link needs to insert a node above call setting the event ptr.
-		Any links that are not async should just be function calls
-  
-  
-	global.event_ptrs['doThing'] = A_event
-
+		global.event_ptrs['B_event'] = 'C_event'
  	'''
-	def construct_event_ptrs(self, script_body):
-		event_ptrs = []
+	def construct_event_ptr_assignment_nodes(self):
+		event_ptr_assignment_nodes = []
 		for link, graph in self.links:
 			if link.async_link:
 				event_ptr_assignment_node = \
@@ -472,21 +483,86 @@ class Translator:
 							idx=astnodes.String(
 								s=link.generated_link_name
 							),
-							value=astnodes.Name(GLOBAL_EVENT_PTR_TABLE_NAME),
+							value=astnodes.Name(EVENT_PTR_TABLE_NAME),
 							notation=astnodes.IndexNotation.SQUARE,
 						)
 					],
 					values=[astnodes.Name(graph.root_node.generated_function_name)],
 				)
 
-				event_ptrs.append(event_ptr_assignment_node)
-		return event_ptrs
+				event_ptr_assignment_nodes.append(event_ptr_assignment_node)
+		return event_ptr_assignment_nodes
 
 	'''
-	################################################
-		LUA AST NODE BUILDERS	
-	################################################
+		Constructs the runtime event name generator. i.e
+		global.event_names['A_event'] = script.generate_event_name()
+		global.event_names['B_event'] = script.generate_event_name()
+ 	'''
+	def construct_event_name_assignment_nodes(self):
+		event_name_assignment_nodes = []
+		for link, graph in self.links:
+			if link.async_link: 
+				event_name_assignment_node = \
+					astnodes.Assign(
+					targets=[
+						astnodes.Index(
+							idx=astnodes.String(
+								s=link.generated_link_name
+							),
+							value=astnodes.Name(EVENT_NAME_TABLE_NAME), 
+							notation=astnodes.IndexNotation.SQUARE,
+						)
+					],
+					values=[astnodes.Call(
+							func=astnodes.Name(GENERATE_EVENT_NAME_FUNCTION_NAME), 
+							args=[]
+						)
+					],
+				)
+
+				event_name_assignment_nodes.append(event_name_assignment_node)
+		return event_name_assignment_nodes
+
 	'''
+		Registers the functions with the event bus i.e
+		script.on_event(global.events['A_event'], function () A() end)
+		script.on_event(global.events['B_event'], function () B() end)
+ 	'''
+	def construct_event_registration_nodes(self):
+		event_registration_nodes = []
+		for link, graph in self.links:
+			# Replace with the condition you want to apply
+			if link.async_link:  
+				# We use an anonymous function in Lua for this
+				func_body = astnodes.AnonymousFunction(
+					args=[], 
+					body=[
+						astnodes.Call(
+							func=astnodes.Name(graph.root_node.generated_function_name),
+							args=[]
+						)
+					]
+				)
+				
+				event_registration_node = \
+					astnodes.Call(
+						func=astnodes.Name(REGISTER_EVENT_FUNCTION_NAME),
+						args=[
+							astnodes.Index(
+								idx=astnodes.String(
+									s=graph.root_node.generated_function_name
+								),
+								value=astnodes.Name("global.events"), #TODO: global.events???
+								notation=astnodes.IndexNotation.SQUARE,
+							),
+							func_body
+						]
+					)
+				
+				event_registration_nodes.append(event_registration_node)
+		return event_registration_nodes
+
+
 
 	'''
 		Else nodes are list<Statement>
